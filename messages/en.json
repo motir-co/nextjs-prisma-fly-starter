@@ -3,7 +3,7 @@
     "signOut": "Sign out"
   },
   "home": {
-    "title": "Next.js + Prisma + Vercel + Neon",
+    "title": "Next.js + Prisma on Fly",
     "editHint": "Edit <code>app/page.tsx</code> to start building."
   },
   "dashboard": {

@@ -4,6 +4,7 @@ import { nextCookies } from 'better-auth/next-js';
 import { headers } from 'next/headers';
 import { db } from '@/lib/db';
 import { sendEmail } from '@/lib/email';
+import { googleCredentials } from './google';
 import { hash, verify } from './passwords';
 
 // Better-Auth instance. Persistence is Postgres via Prisma; password hashing
@@ -19,10 +20,11 @@ import { hash, verify } from './passwords';
 // the email; revisit if your threat model differs.
 //
 // Each project supplies its own Google Cloud OAuth credentials: no shared
-// defaults ship. Missing creds → requiredEnv throws at module load, surfacing
-// the gap loudly instead of letting the Google button error mysteriously at
-// click time. If you don't need Google sign-in, remove the socialProviders
-// block AND the GoogleButton from the auth pages.
+// defaults ship. Google is OPTIONAL: the provider is registered only when both
+// GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are set (lib/auth/google.ts), and
+// the auth pages show the Google button on the same condition. With either
+// missing, sign-in is email and password only — what a preview environment,
+// which has no Google credentials, needs.
 //
 // Password reset is wired below via emailAndPassword.sendResetPassword.
 // Better-Auth mounts the request endpoint at /api/auth/request-password-reset
@@ -42,6 +44,8 @@ function requiredEnv(name: string): string {
   return value;
 }
 
+const google = googleCredentials();
+
 export const auth = betterAuth({
   database: prismaAdapter(db, { provider: 'postgresql' }),
 
@@ -52,40 +56,20 @@ export const auth = betterAuth({
   // the /api/auth/* endpoints — that's `trustedOrigins` below.
   //
   // Resolution order:
-  //   1. BETTER_AUTH_URL — explicit override; set on production with the
-  //      canonical public URL (e.g. https://your-app.vercel.app).
-  //   2. VERCEL_BRANCH_URL — Vercel-injected, the stable branch-alias URL
-  //      (e.g. your-app-git-<branch>-<team>.vercel.app). This is the
-  //      URL browsers actually visit on preview deployments.
-  //   3. VERCEL_URL — fallback to the per-deployment unique URL. Note:
-  //      Vercel's docs warn this var "cannot be used in conjunction with
-  //      Standard Deployment Protection," so prefer VERCEL_BRANCH_URL.
-  //   4. localhost — local dev (`pnpm dev` on :3000).
-  baseURL:
-    process.env['BETTER_AUTH_URL'] ??
-    (process.env['VERCEL_BRANCH_URL']
-      ? `https://${process.env['VERCEL_BRANCH_URL']}`
-      : process.env['VERCEL_URL']
-        ? `https://${process.env['VERCEL_URL']}`
-        : 'http://localhost:3000'),
+  //   1. BETTER_AUTH_URL — set by the hosting environment to the
+  //      deployment's canonical public URL (e.g. https://app.example.com),
+  //      for production and for every preview.
+  //   2. localhost — local dev (`pnpm dev` on :3000).
+  baseURL: process.env['BETTER_AUTH_URL'] ?? 'http://localhost:3000',
   // trustedOrigins is the allowlist for cross-origin (and same-origin
   // with mismatched baseURL) requests to /api/auth/*. Without an explicit
-  // list, Better-Auth defaults to [baseURL] — which fails for Vercel
-  // previews where the request may arrive on the branch-alias URL, the
-  // deployment-unique URL, or a custom domain, all pointing at the same
-  // deployment. Listing all the URLs the deployment is reachable on
-  // closes the gap. Filter out empty/undefined values so a missing env
-  // var doesn't shrink the list to something with empty strings in it
-  // (which Better-Auth would happily allow any unknown origin against).
-  trustedOrigins: [
-    process.env['BETTER_AUTH_URL'],
-    process.env['VERCEL_BRANCH_URL'] ? `https://${process.env['VERCEL_BRANCH_URL']}` : undefined,
-    process.env['VERCEL_URL'] ? `https://${process.env['VERCEL_URL']}` : undefined,
-    process.env['VERCEL_PROJECT_PRODUCTION_URL']
-      ? `https://${process.env['VERCEL_PROJECT_PRODUCTION_URL']}`
-      : undefined,
-    'http://localhost:3000',
-  ].filter((u): u is string => Boolean(u)),
+  // list, Better-Auth defaults to [baseURL]; the explicit list also admits
+  // local dev. Filter out empty/undefined values so a missing env var doesn't
+  // shrink the list to something with empty strings in it (which Better-Auth
+  // would happily allow any unknown origin against).
+  trustedOrigins: [process.env['BETTER_AUTH_URL'], 'http://localhost:3000'].filter(
+    (u): u is string => Boolean(u),
+  ),
 
   emailAndPassword: {
     enabled: true,
@@ -154,12 +138,8 @@ export const auth = betterAuth({
     },
   },
 
-  socialProviders: {
-    google: {
-      clientId: requiredEnv('GOOGLE_CLIENT_ID'),
-      clientSecret: requiredEnv('GOOGLE_CLIENT_SECRET'),
-    },
-  },
+  // Registered only when both credentials are set — see the header.
+  socialProviders: google ? { google } : {},
 
   account: {
     accountLinking: {

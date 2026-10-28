@@ -2,7 +2,7 @@ allowBuilds:
   # @parcel/watcher + @swc/core arrive as optional deps of next-intl (its
   # build-time SWC plugin + file watcher), which this setup never uses. Skip
   # their native builds to silence pnpm 11's ERR_PNPM_IGNORED_BUILDS gate so
-  # `pnpm install` doesn't exit 1 on CI/Vercel.
+  # `pnpm install` doesn't exit 1 on CI or in the image build.
   '@parcel/watcher': false
   '@swc/core': false
   '@prisma/engines': true

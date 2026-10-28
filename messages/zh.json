@@ -3,7 +3,7 @@
     "signOut": "退出登录"
   },
   "home": {
-    "title": "Next.js + Prisma + Vercel + Neon",
+    "title": "Next.js + Prisma on Fly",
     "editHint": "编辑 <code>app/page.tsx</code> 即可开始构建。"
   },
   "dashboard": {
