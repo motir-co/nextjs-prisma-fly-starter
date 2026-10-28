@@ -18,6 +18,7 @@ import {
   ToastProvider,
 } from '@motir/design-system';
 import { localeDir, type Locale } from '@/lib/i18n/locales';
+import projectDesign from '@/motir.design.json';
 import './globals.css';
 
 /**
@@ -64,9 +65,9 @@ const fraunces = Fraunces({
 });
 
 export const metadata: Metadata = {
-  title: 'Next.js + Prisma + Vercel + Neon starter',
+  title: 'Next.js + Prisma Fly starter',
   description:
-    'Production-ready starter with the discovered gotchas baked in: postinstall prisma generate, DATABASE_URL_UNPOOLED for migrations, Prisma 7 conditional config, Node 22+. Skinned with the Motir 3-axis design system.',
+    'Production-ready Fly starter with the discovered gotchas baked in: postinstall prisma generate, DATABASE_URL_UNPOOLED for migrations, Prisma 7 conditional config, Node 22+. Skinned with the Motir 3-axis design system.',
 };
 
 export default async function RootLayout({
@@ -81,15 +82,18 @@ export default async function RootLayout({
   const locale = (await getLocale()) as Locale;
   const messages = await getMessages();
 
-  // The DEFAULT design: the registry defaults (Colour `motir` · Style
-  // `warm-editorial` · Type `motir`). A fresh scaffold has no server-side
-  // appearance store — the anonymous path — so the three server-resolvable axes
-  // render straight onto <html> for a designed first paint, and the FOUC init
-  // script below reconciles any localStorage choice the visitor has made.
-  // (When a real product wires user appearance persistence, swap `null` for the
-  // user's stored `AppliedAppearanceDto` here and in ThemeProvider, exactly as
-  // motir-core does.)
-  const applied = resolveAxesToApplied({});
+  // The PROJECT's design: the three axis ids in motir.design.json. It ships
+  // with the registry defaults (Colour `motir` · Style `warm-editorial` · Type
+  // `motir`); when Motir creates a repository from this starter it writes the
+  // project's chosen ids there in the repository's first commit, alongside a
+  // DESIGN.md naming them. Each id resolves through the package's registries,
+  // so an unknown one falls back to that axis's default rather than breaking.
+  // The three axes render straight onto <html> for a designed first paint, and
+  // the FOUC init script below applies the same design before hydration.
+  // (When a real product wires user appearance persistence, pass the user's
+  // stored `AppliedAppearanceDto` here and in ThemeProvider instead, exactly
+  // as motir-core does.)
+  const applied = resolveAxesToApplied(projectDesign);
 
   return (
     <html
@@ -103,18 +107,19 @@ export default async function RootLayout({
     >
       <head>
         {/*
-          FOUC prevention: run before React hydrates to apply the visitor's
-          saved appearance to <html>. `data-theme` (light/dark) in particular
-          resolves from `system` via matchMedia on the client, so it can only be
-          set here. Anonymous path — the script reads localStorage and falls
-          back to the registry defaults baked into the package.
+          FOUC prevention: run before React hydrates to apply the project's
+          design to <html>. `data-theme` (light/dark) in particular resolves
+          from `system` via matchMedia on the client, so it can only be set
+          here. The project's design is passed as the preference, so the
+          script applies it rather than the registry defaults.
 
-          Safety: `buildThemeInitScript(null)` is a static, compile-time string
-          (no per-request/user input flows into it) with `<` escaped. This is
-          the standard theme-init pattern (next-themes, shadcn/ui) and is
-          XSS-safe because the content is fixed.
+          Safety: `buildThemeInitScript(applied)` embeds only closed-enum
+          registry ids from motir.design.json, resolved through the registries
+          and JSON-serialised with `<` escaped — no per-request or user input
+          flows into it. This is the standard theme-init pattern (next-themes,
+          shadcn/ui) and is XSS-safe because the content is fixed.
         */}
-        <script dangerouslySetInnerHTML={{ __html: buildThemeInitScript(null) }} />
+        <script dangerouslySetInnerHTML={{ __html: buildThemeInitScript(applied) }} />
       </head>
       <body className="min-h-full">
         <NextIntlClientProvider locale={locale} messages={messages}>

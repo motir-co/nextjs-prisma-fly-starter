@@ -77,18 +77,21 @@ describe('app/globals.css imports the package token CSS (no vendored copy)', () 
   });
 });
 
-describe('app/layout.tsx applies the default design + FOUC seam', () => {
+describe('app/layout.tsx applies the project design + FOUC seam', () => {
   const layout = read('app/layout.tsx');
 
   it('sets the three server-resolvable axes on <html>', () => {
     expect(layout).toContain('data-style={applied.styleId}');
     expect(layout).toContain('data-palette={applied.paletteId}');
     expect(layout).toContain('data-type={applied.typeId}');
-    expect(layout).toContain('resolveAxesToApplied({})');
+    // The project's design, from motir.design.json — the file Motir writes the
+    // project's chosen ids into when it creates a repository from this starter.
+    expect(layout).toContain("import projectDesign from '@/motir.design.json'");
+    expect(layout).toContain('resolveAxesToApplied(projectDesign)');
   });
 
   it('renders the package init script and wraps children in the providers', () => {
-    expect(layout).toContain('buildThemeInitScript(null)');
+    expect(layout).toContain('buildThemeInitScript(applied)');
     expect(layout).toContain('<ThemeProvider');
     expect(layout).toContain('<ToastProvider>');
   });
@@ -101,5 +104,41 @@ describe('app/layout.tsx applies the default design + FOUC seam', () => {
     expect(layout).toContain('--font-serif-source');
     expect(layout).toContain('--font-mono-source');
     expect(layout).not.toMatch(/variable: '--font-sans'[^-]/);
+  });
+});
+
+describe('motir.design.json is the project design, and ships as the defaults', () => {
+  const design = JSON.parse(read('motir.design.json')) as Record<string, unknown>;
+
+  it('carries exactly the three axis ids', () => {
+    expect(Object.keys(design).sort()).toEqual(['paletteId', 'styleId', 'typeId']);
+  });
+
+  it('ships the registry defaults, every one a registered id', () => {
+    expect(design).toEqual({
+      styleId: DEFAULT_STYLE_ID,
+      paletteId: DEFAULT_PALETTE_ID,
+      typeId: STYLE_DEFAULT_TYPE[DEFAULT_STYLE_ID] ?? DEFAULT_TYPE_ID,
+    });
+    expect(isStyleId(design['styleId'])).toBe(true);
+    expect(isPaletteId(design['paletteId'])).toBe(true);
+    expect(isTypeId(design['typeId'])).toBe(true);
+  });
+
+  it('a chosen design reaches <html> and the init script; an unknown id falls back', () => {
+    const chosen = resolveAxesToApplied({
+      styleId: 'neo-brutalism',
+      paletteId: 'cobalt',
+      typeId: 'grotesk',
+    });
+    expect(chosen).toMatchObject({
+      styleId: 'neo-brutalism',
+      paletteId: 'cobalt',
+      typeId: 'grotesk',
+    });
+    expect(buildThemeInitScript(chosen)).toContain('"neo-brutalism"');
+    expect(resolveAxesToApplied({ ...design, paletteId: 'gone' }).paletteId).toBe(
+      DEFAULT_PALETTE_ID,
+    );
   });
 });
