@@ -1,0 +1,29 @@
+@import 'tailwindcss';
+
+/*
+ * Motir's 3-axis design system (Colour · Style · Type) ships as a single
+ * distributable stylesheet — @import it and you get the entire token layer:
+ * the Tailwind v4 `@theme` block (so utilities generate with no extra config),
+ * `@custom-variant dark`, the Tier-3 `--el-*` element tokens, and every
+ * `[data-palette]` / `[data-style]` / `[data-type]` / `[data-surface]` swap
+ * block. There is NO hand-copied token CSS in this repo — the package
+ * (`@motir/design-system`, versioned on npm) is the single source of truth
+ * (the "two design systems" drift, notes.html #18, is structurally impossible).
+ *
+ * The applied design is selected by the four `data-*` attributes on <html>
+ * (see app/layout.tsx). A fresh scaffold ships the registry defaults, so it
+ * looks designed out of the box; the planner's stored per-project choice is
+ * re-applied by the scaffold agent (MOTIR-1529) through the same seam.
+ */
+@import '@motir/design-system/theme.css';
+
+body {
+  background-color: var(--el-page-bg);
+  color: var(--el-page-text);
+  font-family: var(--font-sans);
+  transition:
+    background-color var(--transition-duration) ease,
+    color var(--transition-duration) ease;
+  margin: 0;
+  min-height: 100vh;
+}

@@ -1,0 +1,242 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel older runs on the same ref when a new commit lands (saves CI minutes).
+# Safe interpolation: github.workflow is a fixed workflow name; github.ref is a
+# validated git ref identifier (not user-controlled free-form input). Neither
+# reaches a run: step, so no command-injection surface here.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# WHERE THESE JOBS RUN — `vars.MOTIR_RUNNER`, with a GitHub-hosted default.
+#
+# Every job below picks its runner through `${{ vars.MOTIR_RUNNER ||
+# 'ubuntu-latest' }}` rather than hardcoding a label. `MOTIR_RUNNER` is a
+# MOTIR-MANAGED Actions variable: Motir sets it (to its own ephemeral fleet's
+# label) while Motir hosts and pays for this repo's CI. CLEARING OR DELETING IT
+# RETURNS THE REPO TO GITHUB-HOSTED RUNNERS — no edit to this file is needed.
+#
+# That is the whole point: a repo handed over to its owner has zero self-hosted
+# runners, so a hardcoded `runs-on: [self-hosted, motir]` would leave every job
+# queued for 24h and then dropped. An unset variable evaluates to the empty
+# string, which is falsy, so `||` yields the literal `ubuntu-latest` and CI keeps
+# working on the new owner's GitHub minutes. Portable by construction.
+#
+#   - unset `vars.*` -> empty string: docs.github.com/en/actions/reference/contexts-reference#vars-context
+#   - `""` is falsy:   docs.github.com/en/actions/reference/workflows-and-actions/expressions
+#   - `vars` is available to the `runs-on` key (context availability table, contexts reference)
+jobs:
+  lint:
+    name: Lint + Prettier
+    runs-on: ${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm format:check
+
+  typecheck:
+    name: TypeScript
+    runs-on: ${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Prisma client is generated, not committed — typecheck needs it.
+      - run: pnpm prisma generate
+      - run: pnpm typecheck
+
+  # The unit layer — `vitest run` over tests/**/*.test.ts.
+  #
+  # These are INTEGRATION tests against a real Postgres, not mocked units
+  # (see the comment at the top of vitest.config.ts), so this job needs the
+  # same service container and the same `migrate deploy` the e2e job runs:
+  # three of the suites truncate and write the auth tables directly. A job
+  # that only ran `pnpm install && pnpm test` would fail at import time on
+  # "DATABASE_URL is not set".
+  #
+  # Not gated behind `build` — the suite runs in seconds and a red unit test
+  # is the cheapest signal on the PR, so it should not queue behind anything.
+  unit:
+    name: Unit tests
+    # Runner selection goes through the `MOTIR_RUNNER` Actions variable rather
+    # than a hardcoded label: an unset variable is the empty string, which is
+    # falsy, so `||` yields `ubuntu-latest` and a repo with no self-hosted
+    # runners keeps working.
+    runs-on: ${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nextjs_prisma_vercel_starter
+          POSTGRES_PASSWORD: nextjs_prisma_vercel_starter
+          POSTGRES_DB: nextjs_prisma_vercel_starter
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nextjs_prisma_vercel_starter -d nextjs_prisma_vercel_starter"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      # In CI Postgres runs on the standard 5432.
+      DATABASE_URL: postgresql://nextjs_prisma_vercel_starter:nextjs_prisma_vercel_starter@localhost:5432/nextjs_prisma_vercel_starter
+      # BETTER_AUTH_SECRET / GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are NOT
+      # set here on purpose: vitest.config.ts already seeds test-only
+      # placeholders for exactly those three (`??=`, so a developer's .env
+      # still wins). DATABASE_URL has no such default — a real database is
+      # the point.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Prisma client is generated, not committed — the suites import it.
+      - run: pnpm prisma generate
+      # Creates the auth tables the DB-backed suites truncate in beforeEach;
+      # without this the first test errors with `relation "user" does not
+      # exist`. (Same reason the e2e job runs it explicitly.)
+      - run: pnpm prisma migrate deploy
+      - run: pnpm test
+
+  build:
+    name: Next.js build
+    runs-on: ${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nextjs_prisma_vercel_starter
+          POSTGRES_PASSWORD: nextjs_prisma_vercel_starter
+          POSTGRES_DB: nextjs_prisma_vercel_starter
+        ports:
+          - 5432:5432
+        # Wait until pg_isready returns OK before the job's steps start.
+        options: >-
+          --health-cmd "pg_isready -U nextjs_prisma_vercel_starter -d nextjs_prisma_vercel_starter"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      # In CI we use the standard 5432 (no port collisions in a clean runner).
+      DATABASE_URL: postgresql://nextjs_prisma_vercel_starter:nextjs_prisma_vercel_starter@localhost:5432/nextjs_prisma_vercel_starter
+      # Better-Auth reads BETTER_AUTH_SECRET at module-evaluation time, and
+      # `next build` imports the auth module while collecting page data —
+      # so the var must be present even though no real auth happens during
+      # build. This is a throwaway value used ONLY for the CI build; the
+      # real per-environment secret lives in the Vercel dashboard and is
+      # rotated independently. Safe to commit because it grants no access
+      # to anything — it just lets the module load.
+      BETTER_AUTH_SECRET: ci-build-only-not-a-real-secret-do-not-reuse
+      # The Google OAuth provider requires both env vars at module load
+      # (requiredEnv check). CI uses placeholders — they let Better-Auth
+      # register the provider so `next build` succeeds; the real
+      # per-environment values live in the Vercel dashboard. The build
+      # never actually hits Google with these.
+      GOOGLE_CLIENT_ID: ci-build-only-placeholder
+      GOOGLE_CLIENT_SECRET: ci-build-only-placeholder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Prisma 7's `migrate deploy` does not auto-generate the client (unlike
+      # `migrate dev`); next build's internal `tsc` then can't resolve
+      # PrismaClient. Generate explicitly before build. `pnpm build` runs
+      # `prisma migrate deploy && next build`, which migrates this job's
+      # ephemeral Postgres service container.
+      - run: pnpm prisma generate
+      - run: pnpm build
+
+  e2e:
+    name: Playwright E2E
+    runs-on: ${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}
+    # Wait for the build job — E2E is more expensive than a build failure
+    # surfaces and there's no point burning Playwright minutes if `next
+    # build` is red.
+    needs: build
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nextjs_prisma_vercel_starter
+          POSTGRES_PASSWORD: nextjs_prisma_vercel_starter
+          POSTGRES_DB: nextjs_prisma_vercel_starter
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nextjs_prisma_vercel_starter -d nextjs_prisma_vercel_starter"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      # In CI Postgres runs on the standard 5432.
+      DATABASE_URL: postgresql://nextjs_prisma_vercel_starter:nextjs_prisma_vercel_starter@localhost:5432/nextjs_prisma_vercel_starter
+      # See the build job for the rationale on these throwaway values.
+      # Better-Auth's module-load requiredEnv check needs them present;
+      # the actual OAuth round-trip is intercepted by the undici MockAgent
+      # in instrumentation.ts (E2E_TEST_OAUTH=1 below).
+      BETTER_AUTH_SECRET: ci-e2e-only-not-a-real-secret-do-not-reuse
+      GOOGLE_CLIENT_ID: ci-e2e-placeholder
+      GOOGLE_CLIENT_SECRET: ci-e2e-placeholder
+      # Dev-only file email provider — emails appended as JSON lines to
+      # EMAIL_OUTBOX_PATH so the credentials spec can capture the reset
+      # link. The playwright.config.ts's webServer.env block ALSO sets
+      # these on the dev server it spawns, but setting them at the job
+      # level too keeps them visible to anyone reading the workflow file.
+      EMAIL_PROVIDER: file
+      EMAIL_OUTBOX_PATH: /tmp/starter-test-emails.jsonl
+      E2E_TEST_OAUTH: '1'
+      E2E_TEST_OAUTH_USER_PATH: /tmp/starter-test-oauth-user.json
+      # Skip the husky install postinstall — CI has no .git/hooks to wire.
+      HUSKY: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm prisma generate
+      # The auth module reads BETTER_AUTH_SECRET, GOOGLE_CLIENT_ID, and
+      # GOOGLE_CLIENT_SECRET at import time — the same reason `pnpm build`
+      # needs them. `pnpm prisma migrate deploy` creates the auth tables
+      # from prisma/migrations; without this the first sign-up POST hits
+      # an empty database and errors with "relation \"user\" does not
+      # exist". (The `build` job runs this transitively via the build
+      # script; here we run it explicitly because we don't run build.)
+      - run: pnpm prisma migrate deploy
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+      # Always upload the report — pass-runs are useful for debugging
+      # flakes, and the report is small. The trace/video/screenshot
+      # artifacts only exist for failures (config above), so a passing
+      # run uploads only the html summary.
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: out/playwright-report
+          retention-days: 7

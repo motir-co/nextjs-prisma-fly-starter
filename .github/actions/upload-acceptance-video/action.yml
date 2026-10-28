@@ -1,0 +1,156 @@
+# ⚠️ VENDORED FROM `motir-core` (MOTIR-1941; restored by MOTIR-7255, Story MOTIR-7250)
+# alongside `scripts/upload-acceptance-video.mjs`, which this composite runs from
+# the CALLER's workspace — the reason it is a copy rather than a remote reference.
+# SYNC POINT: motir-core `main` @ 9e2afeabdb (2026-10-02, PR #3333 — MOTIR-7253;
+# identical to its branch head 39ee176ba9). The body below is upstream
+# verbatim; this comment header is the only local edit (MOTIR-2693).
+#
+name: Upload acceptance video
+description: >
+  Publish a green acceptance E2E's recorded video (+ trace + chapters) to a Motir
+  story as pending acceptance evidence (Story MOTIR-1627, BYOK). Run it AFTER the
+  acceptance E2E step and only on success — a red run records no video, so this is
+  a no-op. Auth is KEYLESS GitHub OIDC when the repo is connected via the Motir
+  GitHub App — the calling JOB must grant `permissions: id-token: write` (no
+  secret needed). The optional `token` is a PAT path ONLY for a repository with
+  no Motir GitHub App connection; Motir's own lanes never pass one.
+
+# ⚠️ NO ACTIONS EXPRESSION SYNTAX IN THIS FILE'S `description` SCALARS — GITHUB
+# EVALUATES THEM (MOTIR-2937). A dollar sign followed by a double brace inside
+# any `description:` here is parsed as a template expression at MANIFEST
+# CONVERSION time, where the `github` context does not exist. The action then
+# fails template validation and NEVER LOADS: the calling step errors with
+# `Unrecognized named-value: 'github'` and a `TemplateValidationException`
+# before one line of its own logic runs, at the end of a job whose test run was
+# green. Measured on the VENDORED copy in `nextjs-prisma-vercel-starter`, where
+# this manifest is the one that gets loaded (PR #17, job 95486108427); the
+# counterfactual with the two expressions stripped and nothing else changed ran
+# the publish step to completion (PR #19, job 95494641230). motir-core did not
+# see it then because its lane invoked the script directly; since MOTIR-7253 its
+# `.github/workflows/acceptance-tests.yml` `uses:` this action as the starter
+# does, so both repos now parse this manifest — and the guard still belongs in
+# the shared test, which runs before either lane does. NAME the context value in prose
+# instead; `pr-ref` and `pr-title` below are the shape to copy.
+# `tests/acceptance-video-uploader.test.ts` pins this.
+inputs:
+  story-key:
+    description: >
+      (Override) An explicit story key to attach the evidence to (e.g.
+      MOTIR-1627). Leave empty to RESOLVE the target (MOTIR-1684): the recording's
+      self-declared story → the PR's `MOTIR-<id>` (pr-ref / pr-title, resolved to
+      its parent story server-side) → `fallback-story-key`.
+    required: false
+    default: ''
+  pr-ref:
+    description: >
+      The PR head ref (branch) carrying the `MOTIR-<id>` — pass the
+      `github.head_ref` context value, wrapped in the caller's usual Actions
+      expression delimiters (they are spelled out in the calling workflow, never
+      here — see the note above `inputs:`). Used only when `story-key` is empty
+      and the recording did not self-declare a story.
+    required: false
+    default: ''
+  pr-title:
+    description: >
+      The PR title carrying the `MOTIR-<id>` (the status-sync convention) — pass
+      the `github.event.pull_request.title` context value, wrapped in the
+      caller's Actions expression delimiters (spelled out in the calling
+      workflow, never here — see the note above `inputs:`). Parsed when `pr-ref`
+      has no key.
+    required: false
+    default: ''
+  fallback-story-key:
+    description: >
+      The story key used when nothing else resolves (e.g. push-to-main with no
+      PR, and no self-declared recording story). The MOTIR-1627 dogfood.
+    required: false
+    default: ''
+  token:
+    description: >
+      (Fallback, external repositories only) A Motir token with the
+      `integration` scope, for a repo with NO Motir GitHub App connection. Store
+      it as a secret. Leave empty to use keyless GitHub OIDC (requires
+      `permissions: id-token: write` on the job) — motir-core and every project
+      generated from the starter leave it empty and publish over OIDC only.
+    required: false
+    default: ''
+  audience:
+    description: The OIDC audience the token is minted for (must match the server).
+    required: false
+    default: motir-acceptance-video
+  base-url:
+    description: The Motir base URL.
+    required: false
+    default: https://app.motir.co
+  output-dir:
+    description: The Playwright acceptance lane's output dir.
+    required: false
+    default: out/playwright-output-acceptance
+  changed-specs:
+    description: >
+      The acceptance spec files THIS run changed, whitespace- or comma-separated
+      (`git diff --name-only <base> HEAD -- 'tests/e2e/acceptance*.spec.ts'` drops
+      in unchanged). A recording is published only when its own spec is in this
+      list (MOTIR-1937).
+
+      ⚠️ REQUIRED in practice. Publishing SUPERSEDES a story's current evidence,
+      and each recording targets its OWN declared story rather than the PR's — so
+      a run that publishes everything it recorded replaces the receipts of every
+      story that has an acceptance spec. Leaving this empty is FAIL-CLOSED: the
+      run rehearses (discovers, resolves, checks watchability) and writes nothing.
+
+      Gate on the changed spec rather than on the branch: the acceptance panel's
+      approve edge is `in_review → done`, and `in_review` is the PR-OPEN state, so
+      the receipt must be written while the PR is open or the reviewer can never
+      watch-then-approve.
+    required: false
+    default: ''
+  max-artifact-bytes:
+    description: >
+      The publish target's PER-FILE byte cap, which the uploader measures every
+      recording against BEFORE authenticating (MOTIR-1911). Over-cap artifacts are
+      then a reported verdict — annotation + job summary, like the watchability
+      one — instead of an opaque "File is too large, the file length cannot be
+      greater than 104857600 bytes" thrown from inside the Blob `put`.
+
+      Defaults to 100 MB, the cloud `scaled` tier's `maxUploadBytes` — always the
+      right number ON CLOUD, because publishing is gated on a paid AI plan and that
+      same flag (`aiIncludedSeat`) is what lifts the cap to 100 MB. An org without
+      one is capped at 10 MB but 402s before any upload, so every org that can
+      publish at all has 100 MB.
+
+      SET `10485760` IF SELF-HOSTING. Off-cloud is the one place the gate is open
+      and the cap is tight: `resolvePerFileLimitBytes` returns the 10 MB baseline
+      before any tier is consulted, while eligibility is ungated
+      (`applicable:false ⇒ eligible`). Left at the default there, the gate waves
+      through artifacts the store will reject.
+
+      Policy is per artifact: an over-cap TRACE is dropped and the video still
+      publishes (the video IS the receipt — a debugging aid must not cost a story
+      its evidence, which is exactly what it did to MOTIR-813); an over-cap VIDEO
+      is not published and the step exits non-zero.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      # GitHub injects ACTIONS_ID_TOKEN_REQUEST_URL/_TOKEN here automatically when
+      # the job has `id-token: write` — the uploader exchanges them for the OIDC
+      # token, so nothing to pass through. MOTIR_PUBLISH_TOKEN is the PAT fallback
+      # for a repository with no App connection, and is empty in Motir's lanes.
+      # `producedByKey` is not an input: the script derives it from the PR's own
+      # card key (pr-ref, then pr-title), falling back to the story key.
+      env:
+        MOTIR_PUBLISH_TOKEN: ${{ inputs.token }}
+        MOTIR_OIDC_AUDIENCE: ${{ inputs.audience }}
+        MOTIR_BASE_URL: ${{ inputs.base-url }}
+        ACCEPTANCE_STORY_KEY: ${{ inputs.story-key }}
+        ACCEPTANCE_PR_REF: ${{ inputs.pr-ref }}
+        ACCEPTANCE_PR_TITLE: ${{ inputs.pr-title }}
+        ACCEPTANCE_FALLBACK_STORY_KEY: ${{ inputs.fallback-story-key }}
+        ACCEPTANCE_OUTPUT_DIR: ${{ inputs.output-dir }}
+        ACCEPTANCE_CHANGED_SPECS: ${{ inputs.changed-specs }}
+        ACCEPTANCE_MAX_ARTIFACT_BYTES: ${{ inputs.max-artifact-bytes }}
+      run: node scripts/upload-acceptance-video.mjs

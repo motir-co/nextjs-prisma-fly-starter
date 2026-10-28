@@ -1,0 +1,343 @@
+name: Acceptance tests
+
+# ── The acceptance-test lane, spec-scoped (MOTIR-1941 / MOTIR-1937 / MOTIR-1958) ──
+#
+# Records the story-acceptance clip and, on a GREEN pull-request run, PUBLISHES
+# it to its story for a reviewer to watch and approve. See
+# docs/acceptance-video.md for the authoring guide.
+#
+# ⚠️ THIS LANE PUBLISHES THE RECEIPT — OVER KEYLESS OIDC, NO SECRET (MOTIR-7255,
+# following motir-core's MOTIR-7253, 2026-10-01). Between 2026-09-02 (MOTIR-4097)
+# and then it only recorded, and the agent published over the Motir MCP surface.
+# A receipt that exists only if an agent remembered two calls is the least
+# reliable link in the acceptance gate, so for the repositories Motir writes —
+# and every project generated from this template is one — CI publishes again:
+# the `Publish the acceptance receipt` step runs the vendored uploader
+# (`scripts/upload-acceptance-video.mjs`, through
+# `.github/actions/upload-acceptance-video`) for the specs this PR changed. It
+# authenticates with the job's GitHub OIDC identity; a Motir-hosted repository is
+# connected to the Motir GitHub App at creation, which is what that identity
+# resolves through, so there is NOTHING TO CONFIGURE and no Motir token anywhere
+# in this workflow. A `push: main` baseline, a red run and a fork PR (GitHub mints
+# it no OIDC token) publish nothing. An agent working in this repository reads
+# that `uses:` line and stands down instead of publishing over MCP.
+#
+# ⚠️ WHY ITS OWN WORKFLOW, AND NOT A JOB IN ci.yml.
+# The requirement is that a PR which owns no acceptance spec shows NO acceptance
+# check at all. A job-level `if:` does NOT achieve that: a job whose `if:` is
+# false is still REPORTED, as a greyed `Skipped` (`skipping` in `gh pr checks`).
+# A matrix leg cannot be pruned by an expression either. The only mechanism that
+# leaves nothing behind is a workflow that is never TRIGGERED — hence a separate
+# file with a `paths:` filter. No matching file changed → no run → no check.
+#
+# This file replaced exactly that mistake: ci.yml used to carry an
+# `acceptance-specs` detector job feeding an `acceptance` job's `if:`, under a
+# comment claiming the check was "ABSENT — not skipped". It was not. Measured on
+# PR #8 (run 30695963470), a PR touching no acceptance spec listed BOTH
+# `Acceptance video  skipping` and `Changed acceptance specs  pass` (MOTIR-1958).
+#
+# Consequences of being a separate workflow, accepted deliberately:
+#   • It cannot `needs:` ci.yml's `build` job or read that run's artifacts. This
+#     lane needs neither — it runs against `pnpm dev`
+#     (playwright.acceptance.config.ts), not a production build — but it does
+#     mean the lane no longer waits for a green build, so a PR with a broken
+#     build burns these minutes before ci.yml reports. That is the trade for the
+#     check being absent, and it is only paid on the PRs that own a spec.
+#   • Workflows cannot share an `env:` block, so the block below is a deliberate
+#     copy of ci.yml's `e2e` job. CHANGE BOTH TOGETHER.
+#   • ⚠️ A CHANGE TO A PAGE AN ACCEPTANCE SPEC READS DOES NOT RUN THIS LANE on a
+#     pull request, and that is deliberate. An acceptance spec drives a real
+#     product surface, so the `paths:` filter cuts between a page and the only
+#     test that reads it. Widening the filter to the sources those specs assert
+#     against is not on the table: that set is most of your app, so any honest
+#     widening runs this whole lane on nearly every PR — to execute nothing at
+#     all while your lane is empty, which is its normal state.
+#     THIS LANE IS THE RECEIPT LANE, NOT A REGRESSION GATE. Behaviour a page owes
+#     on every PR belongs in the main Playwright lane, which ci.yml already runs
+#     unconditionally; an acceptance spec is what a REVIEWER WATCHES. So if you
+#     change a surface an acceptance spec drives, either run the lane yourself
+#     (`pnpm test:e2e:acceptance`) before merging, or expect the DEFAULT-BRANCH
+#     BASELINE below to find it on your merge.
+#
+# ── THE DEFAULT-BRANCH BASELINE — `push: main`, gated on the lane holding a spec ──
+#
+# WHAT RUNS WHEN, in full — this table is the whole trigger policy:
+#
+#   PR changing an `acceptance*.spec.ts`   lane runs · PUBLISHES on green
+#   PR changing anything else              NO RUN, NO CHECK
+#   push to `main`, lane HAS ≥1 spec       lane runs · NEVER publishes
+#   push to `main`, lane is EMPTY          membership gate only (~10s), nothing else
+#
+# THE PROBLEM IT CLOSES. The `pull_request` filter is deliberately blind to your
+# app (the bullet above), so a change that breaks an acceptance spec merges green
+# and then sits on the default branch until some UNRELATED pull request happens
+# to touch a spec — and that PR's author inherits a diagnosis of somebody else's
+# change. The baseline puts the red on the merge that caused it instead.
+#
+# WHY THE GATE IS THE LOAD-BEARING PART, and not a nicety. A full run of this
+# lane installs pnpm, generates a Prisma client, migrates a Postgres, downloads a
+# Chromium and boots a dev server — the cost is the setup, not the specs, so it
+# is paid in full even when the lane holds nothing. A template repository's lane
+# holds nothing until its first acceptance spec is written, and every project
+# scaffolded from it starts there too. An UNGATED `push:` trigger would therefore
+# spend that setup on every single merge, forever, to run zero tests. Gated, an
+# empty lane costs one checkout per merge and the real cost is paid only inside
+# the window where a story is actually in review.
+#
+# ⚠️ THE "NO CHECK AT ALL" REQUIREMENT IS UNTOUCHED, and it is worth saying why,
+# because the gate LOOKS like the job-level `if:` that requirement forbids.
+# "Absent, not skipped" is a constraint about PULL REQUESTS — a greyed check on
+# somebody's PR. A `push` event attaches its checks to the commit on the default
+# branch; it adds nothing to any open pull request. So the gate can skip freely
+# on `push` and cost no PR a check. On `pull_request` the gate answers `true`
+# unconditionally — the `paths:` filter has already decided, and a triggered PR
+# run is never skipped. If you ever make that answer conditional on something a
+# pull request can see, you have reintroduced the greyed check.
+#
+# ⚠️ AND CANCELLING SUPERSEDED RUNS IS PULL-REQUEST-ONLY. On a PR only the tip
+# matters, so cancelling saves minutes. On the default branch it is wrong:
+# back-to-back merges would cancel each other's baseline and destroy the
+# per-merge attribution that is this trigger's entire product.
+#
+# WHAT IS STILL DELIBERATELY NOT COVERED, said plainly so you do not have to
+# re-derive it: the pull request that BREAKS a spec still goes green. The
+# baseline catches the break one merge later, not before it lands. Closing that
+# would need the `paths:` widening rejected above, and the accepted cost is a red
+# default branch for the length of one fix — bounded, attributed, and paid by the
+# author who caused it rather than by the next passer-by.
+on:
+  pull_request:
+    paths:
+      - 'tests/e2e/acceptance*.spec.ts'
+  # The DEFAULT-BRANCH BASELINE. Deliberately NOT `paths:`-filtered: while the
+  # lane holds a spec, ANY merge could be the one that breaks it, and which
+  # sources that spec reads is precisely what a filter cannot know. The
+  # `membership` gate below is what keeps that affordable.
+  push:
+    branches: [main]
+
+# Cancel older runs on the same ref when a new commit lands (saves CI minutes).
+#
+# ⚠️ THE GROUP CARRIES `github.workflow`, WHICH IS THIS FILE'S `name:` — so the
+# MOTIR-4097 rename changed the group's literal prefix. Harmless, and checked
+# rather than assumed: the group only ever has to distinguish runs of THIS
+# workflow from each other, and every run after the rename reads the same new
+# name. Nothing outside this file joins the group.
+#
+# Safe interpolation: github.workflow is a fixed workflow name; github.ref is a
+# validated git ref identifier (not user-controlled free-form input).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # PULL-REQUEST-ONLY — see the header. A cancelled baseline is a merge whose
+  # effect on the lane nobody ever measured, which is the one thing the baseline
+  # exists to prevent.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Is there anything in the lane to run? A checkout and a `find` — no Postgres,
+  # no install, no browser, no dev server — so an empty lane costs seconds per
+  # merge instead of the full setup the lane pays to run zero tests.
+  #
+  # ⚠️ On `pull_request` this answers `true` unconditionally, and that is not a
+  # shortcut. The `paths:` filter has ALREADY decided that a triggered PR run
+  # should happen. Answering anything else here would turn the `acceptance` job
+  # below into a greyed `Skipped` check on somebody's pull request, which is the
+  # exact defect this workflow was split out of ci.yml to remove. The gate exists
+  # for `push`, where no filter has spoken and no pull request is watching.
+  membership:
+    name: Does the lane hold a spec?
+    # Runner selection goes through the `MOTIR_RUNNER` Actions variable rather
+    # than a hardcoded label — the same seam every job in ci.yml uses. An unset
+    # variable is the empty string, which is falsy, so a repo with no self-hosted
+    # runners falls through to `ubuntu-latest`.
+    runs-on: ${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+      count: ${{ steps.gate.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          # COUNT WHAT THE LANE'S CONFIG WOULD COLLECT, not what the `paths:`
+          # filter above matches. playwright.acceptance.config.ts sets
+          # `testMatch: /acceptance.*\.spec\.ts/`, an UNANCHORED regex over the
+          # path — so `tests/e2e/checkout-acceptance.spec.ts` is a member even
+          # though the trigger glob (a basename prefix) would never match it.
+          # The gate must never answer "empty" while Playwright would collect
+          # something, or the baseline silently stops covering that spec; erring
+          # the other way only costs a run.
+          #
+          # `find` is captured on its own line, with failures swallowed: under
+          # `pipefail` a missing or unreadable `tests/e2e` would otherwise fail
+          # this step and red-light every merge. A generated project that has not
+          # written any E2E tests yet has no such directory, and "no directory"
+          # is an EMPTY LANE, not an error.
+          FOUND=$(find tests/e2e -type f -name '*.spec.ts' 2>/dev/null || true)
+          COUNT=$(printf '%s\n' "${FOUND}" | grep -cE 'acceptance.*\.spec\.ts$' || true)
+          echo "acceptance specs in the lane: ${COUNT}"
+          if [ "${EVENT_NAME}" = 'pull_request' ]; then
+            # The paths filter already decided; a triggered PR run always runs.
+            RUN=true
+          elif [ "${COUNT}" -gt 0 ]; then
+            RUN=true
+          else
+            RUN=false
+          fi
+          echo "event=${EVENT_NAME} run=${RUN}"
+          echo "run=${RUN}" >> "$GITHUB_OUTPUT"
+          echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Acceptance lane membership"
+            echo ""
+            echo "- specs in the lane: **${COUNT}**"
+            echo "- event: \`${EVENT_NAME}\`"
+            echo "- running the lane: **${RUN}**"
+            if [ "${RUN}" = 'false' ]; then
+              echo ""
+              echo "The lane is empty, so this baseline stopped here rather than"
+              echo "paying the full setup to run zero tests."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  acceptance:
+    name: Playwright E2E (acceptance)
+    needs: membership
+    # ⚠️ THIS EXPRESSION MUST NAME NOTHING BUT THE MEMBERSHIP OUTPUT. This is the
+    # one job a pull request can see, so anything else here — a `paths` guess, an
+    # actor check, a label — turns it into the greyed `Skipped` check the whole
+    # split-out-of-ci.yml design exists to remove. The membership job answers
+    # `true` for every `pull_request` event by construction, so on a PR this
+    # condition is satisfied unconditionally and only `push` can ever skip.
+    # `tests/ci-acceptance-lane.test.ts` asserts both halves.
+    if: needs.membership.outputs.run == 'true'
+    # Runner selection goes through the `MOTIR_RUNNER` Actions variable rather
+    # than a hardcoded label — the same seam every job in ci.yml uses, and a new
+    # workflow file is a new `runs-on` site. An unset variable is the empty
+    # string, which is falsy, so `||` yields `ubuntu-latest` and a repo with no
+    # self-hosted runners keeps working. See the block above `jobs:` in ci.yml.
+    runs-on: ${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      # `contents: read` is what checkout needs. `id-token: write` is what the
+      # publish step below needs (MOTIR-7255): it lets the vendored uploader mint
+      # a GitHub OIDC token (audience `motir-acceptance-video`) that Motir
+      # verifies against this repository's App connection — the keyless path, so
+      # no secret is configured. It was retired with the publisher on 2026-09-02
+      # (MOTIR-4097) and restored with it. `membership` does not get it: it
+      # publishes nothing.
+      contents: read
+      id-token: write
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nextjs_prisma_vercel_starter
+          POSTGRES_PASSWORD: nextjs_prisma_vercel_starter
+          POSTGRES_DB: nextjs_prisma_vercel_starter
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nextjs_prisma_vercel_starter -d nextjs_prisma_vercel_starter"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      # In CI Postgres runs on the standard 5432.
+      DATABASE_URL: postgresql://nextjs_prisma_vercel_starter:nextjs_prisma_vercel_starter@localhost:5432/nextjs_prisma_vercel_starter
+      # See ci.yml's build job for the rationale on these throwaway values.
+      # Better-Auth's module-load requiredEnv check needs them present;
+      # the actual OAuth round-trip is intercepted by the undici MockAgent
+      # in instrumentation.ts (E2E_TEST_OAUTH=1 below).
+      BETTER_AUTH_SECRET: ci-e2e-only-not-a-real-secret-do-not-reuse
+      GOOGLE_CLIENT_ID: ci-e2e-placeholder
+      GOOGLE_CLIENT_SECRET: ci-e2e-placeholder
+      # Dev-only file email provider — emails appended as JSON lines to
+      # EMAIL_OUTBOX_PATH so the credentials spec can capture the reset
+      # link. The playwright.acceptance.config.ts's webServer.env block ALSO
+      # sets these on the dev server it spawns, but setting them at the job
+      # level too keeps them visible to anyone reading the workflow file.
+      EMAIL_PROVIDER: file
+      EMAIL_OUTBOX_PATH: /tmp/starter-test-emails.jsonl
+      E2E_TEST_OAUTH: '1'
+      E2E_TEST_OAUTH_USER_PATH: /tmp/starter-test-oauth-user.json
+      # Skip the husky install postinstall — CI has no .git/hooks to wire.
+      HUSKY: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm prisma generate
+      # The auth module reads BETTER_AUTH_SECRET, GOOGLE_CLIENT_ID, and
+      # GOOGLE_CLIENT_SECRET at import time. `pnpm prisma migrate deploy`
+      # creates the auth tables from prisma/migrations; without this the first
+      # sign-up POST hits an empty database and errors with "relation \"user\"
+      # does not exist".
+      - run: pnpm prisma migrate deploy
+      - run: pnpm exec playwright install --with-deps chromium
+      # WHICH specs this PR owns (MOTIR-1937, restored by MOTIR-7255). The
+      # uploader publishes a recording only when its OWN spec is in this list:
+      # publishing SUPERSEDES a story's current receipt, and each recording
+      # targets its own declared story, so a run that published everything it
+      # recorded would replace every other story's receipt. A `push` has no PR
+      # base, so the list is EMPTY and the uploader — which fails closed on an
+      # empty list — publishes nothing.
+      - name: Which acceptance specs does this run own?
+        id: owned-specs
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BASE_SHA}" ]; then
+            echo "no base ref (event: ${GITHUB_EVENT_NAME}) — this run owns no specs and publishes nothing"
+            echo "specs=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A pull_request checkout is the MERGE commit at depth 1, which carries
+          # both parents — so the base is normally already present.
+          git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null ||
+            git fetch --depth=1 origin "${BASE_SHA}"
+          SPECS=$(git diff --name-only "${BASE_SHA}" HEAD -- 'tests/e2e/acceptance*.spec.ts' | tr '\n' ' ')
+          echo "owned acceptance specs: ${SPECS:-<none>}"
+          echo "specs=${SPECS}" >> "$GITHUB_OUTPUT"
+      - run: pnpm test:e2e:acceptance
+      # On a GREEN `pull_request` run, publish the recordings this PR owns to
+      # their OWN story (MOTIR-7255). Each recording resolves its story from the
+      # `acceptance-story.json` sidecar `acceptanceStory()` writes, then the PR's
+      # card key. `producedByKey` is the PR's own card key, so an agent that still
+      # publishes the same commit over MCP collapses into the same receipt.
+      #
+      # ⚠️ NO `token` INPUT, AND NO SECRET. The action's `token` is the PAT path
+      # for a repository with NO Motir GitHub App connection; a Motir-hosted
+      # repository has one from birth. ⚠️ NO `continue-on-error` either: the cases
+      # that must not fail the lane (no OIDC token, a closed story, a recording
+      # this PR does not own) exit 0 inside the uploader, and what does fail it
+      # is a story this PR owns ending the run without a receipt.
+      #
+      # ⚠️ `pull_request` ONLY. The default-branch baseline runs the specs and
+      # publishes nothing: the receipt belongs to the moment the story was in
+      # review.
+      - name: Publish the acceptance receipt
+        if: success() && github.event_name == 'pull_request'
+        uses: ./.github/actions/upload-acceptance-video
+        with:
+          base-url: ${{ vars.MOTIR_BASE_URL || 'https://app.motir.co' }}
+          pr-ref: ${{ github.head_ref }}
+          pr-title: ${{ github.event.pull_request.title }}
+          changed-specs: ${{ steps.owned-specs.outputs.specs }}
+      # Always upload the report. A green run's report is where the recorded
+      # video, trace and `chapters.json` survive for a reviewer to watch by hand,
+      # beside the receipt the step above published — and a red one is how the
+      # lane is debugged at all.
+      - name: Upload the acceptance Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-acceptance
+          path: out/playwright-report-acceptance
+          retention-days: 7

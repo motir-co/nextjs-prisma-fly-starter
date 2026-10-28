@@ -1,0 +1,72 @@
+{
+  "name": "nextjs-prisma-vercel-starter",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Production-ready Next.js + Prisma + Vercel + Neon starter, with discovered gotchas baked in.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@11.2.2",
+  "scripts": {
+    "dev": "next dev",
+    "build": "prisma migrate deploy && next build",
+    "start": "next start",
+    "lint": "eslint",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "//test:e2e:acceptance": "--pass-with-no-tests is load-bearing, not papered-over: a receipt LEAVES this lane once its story is approved, so an empty lane is a legitimate steady state here and Playwright's default (exit 1 on 'No tests found') would red-light the PR that retires the last spec. See docs/acceptance-video.md.",
+    "test:e2e:acceptance": "playwright test --config playwright.acceptance.config.ts --pass-with-no-tests",
+    "prepare": "husky",
+    "postinstall": "prisma generate"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx}": [
+      "eslint --fix --max-warnings=0",
+      "prettier --write"
+    ],
+    "*.{json,css,md,yml,yaml}": [
+      "prettier --write"
+    ]
+  },
+  "dependencies": {
+    "@better-auth/prisma-adapter": "^1.6.11",
+    "@motir/design-system": "^0.1.0",
+    "@prisma/adapter-pg": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "argon2": "^0.44.0",
+    "better-auth": "^1.6.11",
+    "next": "16.2.6",
+    "next-intl": "^4.13.0",
+    "pg": "^8.21.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^22.19.19",
+    "@types/pg": "^8.20.0",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitest/coverage-v8": "^4.1.7",
+    "dotenv": "^17.4.2",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.6",
+    "eslint-config-prettier": "^10.1.8",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.0.5",
+    "prettier": "^3.8.3",
+    "prisma": "^7.8.0",
+    "tailwindcss": "^4",
+    "tsx": "^4.22.3",
+    "typescript": "^5",
+    "undici": "^6.26.0",
+    "vitest": "^4.1.7"
+  }
+}

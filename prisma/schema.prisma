@@ -1,0 +1,123 @@
+// Prisma schema.
+//
+// Prisma 7 note: the datasource URL lives in `prisma.config.ts` (loaded at
+// CLI startup), not here. This file declares only the provider and models.
+//
+// Auth models (User, Account, Session, Verification) are wired up for
+// Better-Auth (lib/auth/index.ts). Field naming follows Better-Auth's
+// adapter conventions so the adapter requires zero custom field mapping:
+//   - User.emailVerified is Boolean, not "emailVerifiedAt: DateTime?".
+//   - The password hash lives on the Account row (Account.password) under
+//     providerId="credential", not on User. A single User can have BOTH a
+//     credential Account and OAuth Account rows (e.g. for Google sign-in).
+//   - OAuth account state uses providerId / accountId (not provider /
+//     providerAccountId) and accessTokenExpiresAt / refreshTokenExpiresAt
+//     (not a single expiresAt). These names match the Better-Auth
+//     accountSchema in @better-auth/core verbatim.
+//   - All `id` fields are plain `String`, not UUID. Better-Auth generates
+//     its own URL-safe random strings (base62-ish) for primary keys and
+//     inserts them via the adapter; declaring the column as Postgres UUID
+//     would reject those strings outright. The repo's direct-DB code paths
+//     fall back to Prisma's `@default(cuid())` on inserts that don't
+//     supply an id.
+//
+// Email uniqueness is enforced lowercase in the application layer:
+// Better-Auth's userSchema transforms email to lowercase before
+// persistence, and the repo layer in lib/users/repo.ts mirrors that for
+// any direct-DB code paths. This avoids depending on Postgres CITEXT
+// extensions for fresh local dev.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// Placeholder model that exists only so the initial migration has something
+/// to apply (Prisma needs at least one model to create a non-empty migration).
+/// Delete this once you add your real models, or rename it to whatever your
+/// first real entity is.
+model Marker {
+  id        Int      @id @default(autoincrement())
+  createdAt DateTime @default(now())
+}
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  emailVerified Boolean  @default(false)
+  name          String
+  image         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  accounts Account[]
+  sessions Session[]
+
+  @@map("user")
+}
+
+/// Both credential (email/password) AND OAuth provider linkages live here.
+/// providerId = "credential" → Account.password holds the argon2 hash.
+/// providerId = "google" → Account.accessToken / refreshToken / idToken
+/// hold the OAuth tokens; Account.password is null. The composite unique on
+/// (providerId, accountId) is Better-Auth's expected shape — it's what makes
+/// findOrCreateOAuthUser's idempotency cheap.
+model Account {
+  id                    String    @id @default(cuid())
+  userId                String
+  providerId            String
+  accountId             String
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  /// Argon2id hash. Null for OAuth-only Account rows. The application layer
+  /// only ever reads/writes this via lib/auth/passwords.ts.
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+  @@map("account")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("session")
+}
+
+/// Email-verification and password-reset tokens. Better-Auth's verification
+/// table is keyed by (identifier, value) — `identifier` is typically the
+/// user's email (for verification) or `reset-password:<token>` (for password
+/// reset), `value` is the opaque token or the user id that the token resolves
+/// to. One table covers both cases.
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}

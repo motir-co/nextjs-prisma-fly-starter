@@ -1,0 +1,13 @@
+{
+  "common": {
+    "signOut": "Sign out"
+  },
+  "home": {
+    "title": "Next.js + Prisma + Vercel + Neon",
+    "editHint": "Edit <code>app/page.tsx</code> to start building."
+  },
+  "dashboard": {
+    "title": "Dashboard (smoke route)",
+    "signedInAs": "Signed in as <strong>{email}</strong>"
+  }
+}

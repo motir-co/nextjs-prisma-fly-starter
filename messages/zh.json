@@ -1,0 +1,13 @@
+{
+  "common": {
+    "signOut": "退出登录"
+  },
+  "home": {
+    "title": "Next.js + Prisma + Vercel + Neon",
+    "editHint": "编辑 <code>app/page.tsx</code> 即可开始构建。"
+  },
+  "dashboard": {
+    "title": "工作台（冒烟测试路由）",
+    "signedInAs": "已登录：<strong>{email}</strong>"
+  }
+}

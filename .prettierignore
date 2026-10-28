@@ -1,0 +1,14 @@
+# Files Prettier should not touch.
+# Auto-generated:
+.next/
+out/
+build/
+node_modules/
+pnpm-lock.yaml
+next-env.d.ts
+
+# Prisma's migration SQL has its own formatting from the CLI; leave it alone.
+prisma/migrations/
+
+# Canonical legal text — DO NOT reformat (would change meaning).
+LICENSE

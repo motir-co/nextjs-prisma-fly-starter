@@ -1,0 +1,235 @@
+# Delete Vercel preview deployments when a PR closes (merged or not).
+#
+# Why this workflow exists
+# ------------------------
+# If you use the Vercel-Managed Neon Marketplace integration (or any other
+# managed Marketplace database with similar branching), preview-branch
+# cleanup is tied to Vercel deployment deletion, NOT to Git branch deletion
+# (see https://neon.com/docs/guides/vercel-branch-cleanup). Vercel retains
+# preview deployments for 6 months by default, so without this workflow the
+# database branches accumulate against your free-tier branch cap and PR
+# previews start failing with "Resource provisioning failed."
+#
+# This workflow listens for `pull_request: closed` (fires on both merge
+# and close-without-merge) and deletes every Vercel preview deployment
+# whose `meta.githubCommitRef` matches the PR's head branch. Vercel's
+# lifecycle hook then deletes the linked database branch automatically.
+#
+# Three configuration states, three DIFFERENT outcomes — do not collapse them
+# ---------------------------------------------------------------------------
+# The `Classify Vercel configuration` step below splits on how many of the
+# three required values are set, and the three arms are deliberately not the
+# same. An earlier revision tested only "is anything missing?" and exited 1,
+# which made state (a) — the state EVERY freshly scaffolded repo is in —
+# report a red X on every single closed PR, for an integration its owner was
+# never asked to set up. A permanently red check teaches people to stop
+# reading checks, so it corrupts the signal exactly as much as a lane that
+# reports success while failing does.
+#
+#   (a) NONE of the three set → this repo does not use Vercel previews.
+#       Log a notice, skip the delete step, exit 0. There is nothing to
+#       clean up and nothing was misconfigured. NOT an error.
+#   (b) SOME but not all set → a real misconfiguration, and the loud one:
+#       whoever set two of three believes cleanup is running. It is not, and
+#       database branches are silently accumulating until previews start
+#       failing with "Resource provisioning failed". Name exactly which
+#       values are missing and exit 1. DO NOT SOFTEN THIS ARM — collapsing
+#       it back into (a) is the fail-open shape this file exists to avoid.
+#   (c) ALL three set → enumerate and delete, as documented below.
+#
+# ⚠️ Why the split lives in a STEP and not in a job-level `if:`. The `secrets`
+# context is not available in `jobs.<id>.if` (only `github`, `needs`, `vars`
+# and `inputs` are), so a job-level condition can read the two `vars.*` but is
+# blind to `secrets.VERCEL_TOKEN` — it could not tell (a) from a (b) whose only
+# set value is the token, and would silently skip the case that most needs to
+# shout. Inside the step all three arrive through the job's `env:` block, so
+# the classification is total. The cost is that the job always runs and so
+# always reports a (green) check; see the CI section of README.md.
+#
+# Required GitHub repo configuration
+# ----------------------------------
+# Secrets (Settings → Secrets and variables → Actions → Secrets):
+#   secrets.VERCEL_TOKEN — Vercel Access Token, team-scoped, with
+#     deployment-delete permission. Created in Vercel account settings.
+#     Rotate annually.
+#
+# Variables (Settings → Secrets and variables → Actions → Variables):
+#   vars.VERCEL_ORG_ID     — your team or personal-account ID from Vercel
+#     (visible in `.vercel/repo.json` once `vercel link` runs locally, or
+#     in the Vercel dashboard under Settings → General).
+#   vars.VERCEL_PROJECT_ID — the Vercel project's ID, same source as above.
+#   vars.MOTIR_RUNNER      — OPTIONAL, and MOTIR-MANAGED. Selects which runner
+#     this job (and every job in ci.yml) runs on. Motir sets it while Motir
+#     hosts and pays for this repo's CI; CLEARING OR DELETING IT RETURNS THE
+#     REPO TO GITHUB-HOSTED RUNNERS (`ubuntu-latest`) with no edit to this
+#     file. This job closes PRs and is billable like any other, so it takes
+#     the same seam. See the block above `jobs:` in ci.yml.
+#
+# We use VARIABLES (not secrets) for the org/project IDs because they
+# already appear in `.vercel/repo.json` whenever the project is linked,
+# so they're not sensitive — anyone with repo access can already see them.
+# Variables are easier to inspect and don't require redaction in logs.
+#
+# Security note: every reference to `github.event.pull_request.head.ref`
+# is routed through an `env:` variable rather than spliced into a
+# `run:` script. Branch names accept characters that could be shell-
+# interpreted; routing through env vars is GitHub's recommended pattern.
+# See https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/
+
+name: Cleanup preview deployments
+
+on:
+  pull_request:
+    types: [closed]
+
+# Run one cleanup per PR; if a follow-up event arrives (e.g. user
+# reopens then re-closes), the new run cancels any still-active prior run.
+concurrency:
+  group: cleanup-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  remove-deployments:
+    name: Delete preview deployments
+    runs-on: ${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+      PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      # Splits on the three states documented in the header block. The two
+      # arms that do NOT proceed are opposites on purpose: nothing configured
+      # is a no-op, half configured is a hard failure.
+      - name: Classify Vercel configuration
+        id: config
+        run: |
+          set -euo pipefail
+          present=()
+          missing=()
+          for name in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
+            case "$name" in
+              VERCEL_TOKEN) label="secrets.${name}" ;;
+              *) label="vars.${name}" ;;
+            esac
+            # `${!name:-}` (not `${!name}`): the job's env: block always defines
+            # all three — empty when unset — but under `set -u` a bare indirect
+            # expansion of a genuinely absent variable aborts the step, which is
+            # the red X this whole split exists to remove. Tolerate both.
+            if [ -n "${!name:-}" ]; then present+=("$label"); else missing+=("$label"); fi
+          done
+
+          # (a) Nothing configured — this repo does not use Vercel previews.
+          if [ "${#present[@]}" -eq 0 ]; then
+            echo "::notice::No Vercel preview configuration on this repo — nothing to clean up."
+            echo "This repo sets none of secrets.VERCEL_TOKEN, vars.VERCEL_ORG_ID, vars.VERCEL_PROJECT_ID,"
+            echo "so it is not linked to a Vercel project and has no preview deployments to delete."
+            echo "That is a supported state, not an error — this job is a no-op and the check is green."
+            echo ""
+            echo "If you DO want preview-database cleanup, set all three (see the README's CI section)."
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # (b) Half configured — the dangerous state. Cleanup is not running,
+          #     and whoever set the other values believes it is.
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Vercel preview cleanup is PARTIALLY configured — missing: ${missing[*]}"
+            echo "Already set: ${present[*]}"
+            echo ""
+            echo "Cleanup cannot run, so preview database branches will accumulate against your"
+            echo "branch cap until new previews fail with 'Resource provisioning failed'."
+            echo "Set the missing values in the repo's GitHub Actions settings:"
+            echo "  Secrets:   Settings → Secrets and variables → Actions → Secrets"
+            echo "  Variables: Settings → Secrets and variables → Actions → Variables"
+            echo "…or clear ALL three to opt out of preview cleanup entirely."
+            exit 1
+          fi
+
+          # (c) Fully configured — proceed.
+          echo 'configured=true' >> "$GITHUB_OUTPUT"
+
+      - name: Enumerate and delete preview deployments
+        if: steps.config.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+
+          echo "Cleaning up preview deployments for PR #${PR_NUMBER}"
+          echo "Head branch ref: ${PR_HEAD_REF}"
+          echo ""
+
+          # 1) List deployments for this project filtered by branch ref.
+          #    Vercel records the source branch under meta.githubCommitRef
+          #    (set by the GitHub integration on every push-triggered deploy).
+          #    We use --data-urlencode so branch names containing slashes
+          #    get properly encoded.
+          LIST_RESPONSE=$(curl -sS -G \
+            -H "Authorization: Bearer ${VERCEL_TOKEN}" \
+            --data-urlencode "projectId=${VERCEL_PROJECT_ID}" \
+            --data-urlencode "teamId=${VERCEL_ORG_ID}" \
+            --data-urlencode "limit=100" \
+            --data-urlencode "target=preview" \
+            --data-urlencode "meta-githubCommitRef=${PR_HEAD_REF}" \
+            "https://api.vercel.com/v6/deployments")
+
+          # Bail loudly if the API returned an error (most often: token
+          # expired / insufficient scope). Without this the next `jq` would
+          # output nothing and the workflow would silently succeed with
+          # zero deletions, which is the worst possible failure mode for
+          # a cleanup job.
+          if echo "$LIST_RESPONSE" | jq -e '.error' >/dev/null 2>&1; then
+            echo "::error::Vercel API returned an error:"
+            echo "$LIST_RESPONSE" | jq -r '.error'
+            exit 1
+          fi
+
+          DEPLOYMENT_IDS=$(echo "$LIST_RESPONSE" | jq -r '.deployments[].uid')
+
+          if [ -z "$DEPLOYMENT_IDS" ]; then
+            echo "No preview deployments found for branch ${PR_HEAD_REF}. Nothing to clean up."
+            exit 0
+          fi
+
+          DEPLOYMENT_COUNT=$(echo "$DEPLOYMENT_IDS" | wc -l | tr -d ' ')
+          echo "Found ${DEPLOYMENT_COUNT} deployment(s) to delete:"
+          echo "$DEPLOYMENT_IDS"
+          echo ""
+
+          # 2) DELETE each deployment. If you use the Vercel-Neon (or
+          #    similar) lifecycle, deleting the Vercel deployment triggers
+          #    the database integration to delete the linked preview branch.
+          #
+          #    404 is treated as success (deployment already gone — e.g.
+          #    from a prior partial run or Vercel's own retention sweep).
+          #    Any other non-2xx is a hard failure.
+          FAILED=0
+          while IFS= read -r DEPLOY_ID; do
+            [ -z "$DEPLOY_ID" ] && continue
+            HTTP_CODE=$(curl -sS -o /tmp/del-resp.txt -w "%{http_code}" \
+              -X DELETE \
+              -H "Authorization: Bearer ${VERCEL_TOKEN}" \
+              "https://api.vercel.com/v13/deployments/${DEPLOY_ID}?teamId=${VERCEL_ORG_ID}")
+
+            case "$HTTP_CODE" in
+              2*) echo "  [${HTTP_CODE}] deleted ${DEPLOY_ID}" ;;
+              404) echo "  [${HTTP_CODE}] already gone ${DEPLOY_ID}" ;;
+              *)
+                echo "::error::Failed to delete ${DEPLOY_ID} (HTTP ${HTTP_CODE})"
+                cat /tmp/del-resp.txt
+                echo ""
+                FAILED=1
+                ;;
+            esac
+          done <<< "$DEPLOYMENT_IDS"
+
+          if [ "$FAILED" -ne 0 ]; then
+            exit 1
+          fi
+
+          echo ""
+          echo "Done. If your storage integration cascades on deployment"
+          echo "deletion (e.g. Vercel-Neon), the linked DB branch will be"
+          echo "removed within a few minutes."
