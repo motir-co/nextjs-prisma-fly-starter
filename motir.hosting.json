@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "targets": ["fly"],
+  "port": 3000,
+  "healthCheck": { "path": "/api/health" },
+  "startCommand": "node server.js",
+  "buildCommand": "pnpm build",
+  "requires": { "websockets": false, "backgroundWork": false },
+  "database": {
+    "kind": "postgres",
+    "migrateCommand": "node migrate/node_modules/prisma/build/index.js migrate deploy --config migrate/prisma.config.ts"
+  }
+}
