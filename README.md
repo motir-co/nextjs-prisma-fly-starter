@@ -150,18 +150,19 @@ default.
 
 ## Scripts
 
-| Script                     | What it does                                                        |
-| -------------------------- | ------------------------------------------------------------------- |
-| `pnpm dev`                 | Start the dev server on `localhost:3000`                            |
-| `pnpm build`               | Apply pending Prisma migrations, then production build (0 warnings) |
-| `pnpm start`               | Start the production server                                         |
-| `pnpm lint`                | Run ESLint                                                          |
-| `pnpm format`              | Run Prettier and write fixes in place                               |
-| `pnpm format:check`        | Run Prettier in check mode (used by CI)                             |
-| `pnpm typecheck`           | Run `tsc --noEmit`                                                  |
-| `pnpm test`                | Run Vitest unit / integration tests against a real Postgres         |
-| `pnpm test:e2e`            | Run Playwright E2E tests (spawns the dev server automatically)      |
-| `pnpm test:e2e:acceptance` | Run the acceptance lane (records a clip per story flow)             |
+| Script                     | What it does                                                   |
+| -------------------------- | -------------------------------------------------------------- |
+| `pnpm dev`                 | Start the dev server on `localhost:3000`                       |
+| `pnpm build`               | Production build (0 warnings); touches no database             |
+| `pnpm db:migrate`          | Apply pending Prisma migrations (`prisma migrate deploy`)      |
+| `pnpm start`               | Start the production server                                    |
+| `pnpm lint`                | Run ESLint                                                     |
+| `pnpm format`              | Run Prettier and write fixes in place                          |
+| `pnpm format:check`        | Run Prettier in check mode (used by CI)                        |
+| `pnpm typecheck`           | Run `tsc --noEmit`                                             |
+| `pnpm test`                | Run Vitest unit / integration tests against a real Postgres    |
+| `pnpm test:e2e`            | Run Playwright E2E tests (spawns the dev server automatically) |
+| `pnpm test:e2e:acceptance` | Run the acceptance lane (records a clip per story flow)        |
 
 ## Project layout
 
