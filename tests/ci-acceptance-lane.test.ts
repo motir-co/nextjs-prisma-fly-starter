@@ -201,10 +201,16 @@ describe('the lane publishes on a green PR run, over OIDC only (MOTIR-7255)', ()
     // OIDC only: a Motir-hosted repository is App-connected at creation. The
     // action's `token` input is for a repository with no App connection.
     expect(publishStep()).not.toMatch(/^\s*token:/m);
+    // `MOTIR_FLY_PREVIEW_PUSH_TOKEN` is not a Motir credential: it is the Fly
+    // deploy token for the preview image app, and it can push one image
+    // namespace and nothing else (MOTIR-5769 §4). Where it may appear and how is
+    // `preview-image-workflow.test.ts`'s to police, so it is the one name skipped.
     const offenders = ciYaml()
       .filter(([f]) => f.startsWith('.github/workflows/'))
       .filter(([, text]) =>
-        /MOTIR_UPLOAD_TOKEN|MOTIR_PUBLISH_TOKEN|secrets\.MOTIR/.test(codeOf(text)),
+        /MOTIR_UPLOAD_TOKEN|MOTIR_PUBLISH_TOKEN|secrets\.MOTIR(?!_FLY_PREVIEW_PUSH_TOKEN\b)/.test(
+          codeOf(text),
+        ),
       )
       .map(([f]) => f);
     expect(offenders).toEqual([]);
