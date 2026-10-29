@@ -234,3 +234,41 @@ describe('the workflow is scoped to one pull request, with least privilege', () 
     expect(job['runs-on']).toBe("${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}");
   });
 });
+
+// MOTIR-5778: the enable gate. A Fly starter is a public template; cloned
+// outside Motir, this workflow must never run, so removing or loosening the
+// gate fails here by name.
+describe('the job is gated on Motir switching previews on', () => {
+  const wf = loadWorkflow();
+  const job = onlyJob(wf);
+
+  /** The job's `if:` as its `&&` clauses, whitespace-normalised. */
+  function clauses(condition: string | undefined): string[] {
+    return (condition ?? '')
+      .split('&&')
+      .map((c) => c.replace(/\s+/g, ' ').trim())
+      .filter(Boolean);
+  }
+
+  it('carries an if: that ANDs exactly the three conditions', () => {
+    expect(job.if, 'preview-image.yml lost its job-level if:').toEqual(expect.any(String));
+    expect(job.if).not.toMatch(/\|\||!\s*\(/);
+    expect(clauses(job.if).sort()).toEqual(
+      [
+        "vars.MOTIR_HOSTING_BUILD == 'on'",
+        "vars.MOTIR_HOSTING_TARGET == 'fly'",
+        'github.event.pull_request.head.repo.full_name == github.repository',
+      ].sort(),
+    );
+  });
+
+  it('no other workflow can reach the push token', () => {
+    const dir = path.join(process.cwd(), '.github/workflows');
+    for (const file of fs.readdirSync(dir).filter((f) => /\.ya?ml$/.test(f))) {
+      if (file === 'preview-image.yml') continue;
+      expect(fs.readFileSync(path.join(dir, file), 'utf8'), file).not.toMatch(
+        /MOTIR_FLY_PREVIEW_PUSH_TOKEN/,
+      );
+    }
+  });
+});
