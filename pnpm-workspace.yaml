@@ -11,5 +11,8 @@ allowBuilds:
   prisma: true
   sharp: true
   unrs-resolver: true
+# @motir/design-system is Motir's own package, published from motir-core; the
+# starter tracks the version motir-core validates design choices against, so a
+# fresh release is installed the day it lands (MOTIR-10048).
 minimumReleaseAgeExclude:
-  - '@motir/design-system@0.1.0'
+  - '@motir/design-system'
