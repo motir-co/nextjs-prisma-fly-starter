@@ -1,0 +1,157 @@
+# Build this repository's image on a pull request and push it to its Fly
+# PREVIEW image repository — only when Motir has switched previews on.
+#
+# What this workflow is, and what it is not
+# -----------------------------------------
+# Motir's hosting decision (MOTIR-5769, §4 and §11) splits a preview in two:
+# the repository's own CI BUILDS AND PUSHES one `linux/amd64` image per commit,
+# and motir-core DEPLOYS it through its deploy port. This file is the first
+# half and nothing else. It never creates, starts, stops or routes a Machine,
+# and the only credential it ever sees can do exactly one thing: push to the
+# preview image repository `registry.fly.io/mh-<rid>-pv` (an app-scoped Fly
+# deploy token for that one app, minted by Motir's enablement).
+#
+# INERT UNLESS MOTIR TURNS IT ON. The job runs only when ALL of these hold:
+#
+#   vars.MOTIR_HOSTING_BUILD  == 'on'   — the org Actions variable Motir sets on
+#                                         its own GitHub organisation;
+#   vars.MOTIR_HOSTING_TARGET == 'fly'  — the repository variable naming where
+#                                         this repository runs. This starter's
+#                                         motir.hosting.json supports only Fly,
+#                                         and this file pushes only to Fly;
+#   the pull request comes from THIS repository, not a fork — a fork's run
+#                                         gets no secrets, and its code must
+#                                         never run with a push credential.
+#
+# A repository generated from this template with none of that set shows this
+# job as SKIPPED (grey), never red, and every other check is unaffected. Why
+# the gate is a job-level `if:` and not a step: `vars` and `github` are both
+# available to `jobs.<id>.if`, and a skipped job is exactly the "not enabled
+# here" state — unlike cleanup-preview-deployments.yml, there is no
+# half-configured arm that needs to shout, because Motir writes the variables
+# and the secret together.
+#
+# Configuration Motir writes (names are MOTIR-5769 §11's, verbatim)
+# -----------------------------------------------------------------
+#   vars.MOTIR_HOSTING_BUILD          — org variable, `on` to enable.
+#   vars.MOTIR_HOSTING_TARGET         — repository variable, `fly` here.
+#   vars.MOTIR_HOSTING_IMAGE_PREVIEW  — repository variable: the PREVIEW image
+#       repository, `registry.fly.io/mh-<rid>-pv`. The production repository
+#       (`MOTIR_HOSTING_IMAGE_PRODUCTION`, `registry.fly.io/mh-<rid>`) is never
+#       referenced here, and the push step refuses a target that is not a
+#       `-pv` repository on registry.fly.io.
+#   secrets.MOTIR_FLY_PREVIEW_PUSH_TOKEN — repository secret: the deploy token
+#       for `mh-<rid>-pv`. It reaches a step ONLY through `env:` and is piped to
+#       `docker login --password-stdin`; it is never spliced into a `run:` line,
+#       so it never lands in a process list or a shell trace.
+#   vars.MOTIR_RUNNER                 — optional; see the block above `jobs:` in
+#       ci.yml. Docker is required, which GitHub-hosted runners and Motir's
+#       fleet both have.
+#
+# The pushed tag
+# --------------
+#   <MOTIR_HOSTING_IMAGE_PREVIEW>:<full 40-character head commit SHA>
+#
+# One immutable tag per commit (D-3: "one OCI image per commit"). motir-core
+# already holds the pull request's head SHA from its webhook, so the reference
+# needs no other channel; a force-push or a new commit is a new tag, never an
+# overwrite of one a running preview was started from.
+#
+# tests/preview-image-workflow.test.ts parses this file and pins the gate, the
+# token-through-env rule and the push target, so none of them can be removed
+# quietly.
+
+name: Preview image
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# One build per pull request; a new push cancels the build of the commit it
+# replaced, whose image no preview would run anyway. The PR number is an
+# integer from the event payload, not free-form input.
+concurrency:
+  group: preview-image-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# Least privilege: the checkout needs to read the repository, and nothing in
+# this workflow writes to GitHub. The push goes to Fly's registry with Fly's
+# token, not with GITHUB_TOKEN.
+permissions:
+  contents: read
+
+jobs:
+  push-preview-image:
+    name: Build and push preview image
+    if: >-
+      vars.MOTIR_HOSTING_BUILD == 'on' &&
+      vars.MOTIR_HOSTING_TARGET == 'fly' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    env:
+      IMAGE_REPOSITORY: ${{ vars.MOTIR_HOSTING_IMAGE_PREVIEW }}
+      FLY_PUSH_TOKEN: ${{ secrets.MOTIR_FLY_PREVIEW_PUSH_TOKEN }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Build exactly the commit the tag names — the PR head, not the
+          # synthetic merge commit `pull_request` checks out by default.
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      # Refuse, by name, anything that is not a Fly PREVIEW image repository or
+      # a missing token, before any credential is used. A production target
+      # (`registry.fly.io/mh-<rid>`, no `-pv`) fails here.
+      - name: Check the push target
+        id: target
+        run: |
+          set -euo pipefail
+          if [ -z "${FLY_PUSH_TOKEN:-}" ]; then
+            echo "::error::secrets.MOTIR_FLY_PREVIEW_PUSH_TOKEN is not set, but previews are switched on for this repository."
+            exit 1
+          fi
+          if ! [[ "${IMAGE_REPOSITORY:-}" =~ ^registry\.fly\.io/[a-z0-9-]+-pv$ ]]; then
+            echo "::error::vars.MOTIR_HOSTING_IMAGE_PREVIEW must be a Fly preview image repository (registry.fly.io/<app>-pv); got '${IMAGE_REPOSITORY:-}'."
+            exit 1
+          fi
+          echo "ref=${IMAGE_REPOSITORY}:${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to the Fly registry
+        run: printf '%s' "$FLY_PUSH_TOKEN" | docker login registry.fly.io --username x --password-stdin
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.target.outputs.ref }}
+          # A plain single-platform manifest: Fly Machines pull by platform, and
+          # the attestation index buildx adds by default carries an
+          # `unknown/unknown` entry that adds nothing a preview runs.
+          provenance: false
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.event.pull_request.head.sha }}
+          cache-from: type=gha,scope=preview-image
+          cache-to: type=gha,mode=max,scope=preview-image
+
+      - name: Report the pushed image
+        env:
+          IMAGE_REF: ${{ steps.target.outputs.ref }}
+        run: |
+          echo "Pushed ${IMAGE_REF}"
+          echo "Pushed \`${IMAGE_REF}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      # Self-hosted runners can outlive one job; never leave the push
+      # credential in ~/.docker/config.json behind it.
+      - name: Log out of the Fly registry
+        if: always()
+        run: docker logout registry.fly.io
