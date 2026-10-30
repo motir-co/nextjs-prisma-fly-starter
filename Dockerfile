@@ -57,6 +57,17 @@ COPY --from=build --chown=node:node /app/.next/static ./.next/static
 COPY --from=build --chown=node:node /app/public ./public
 COPY --from=migrate --chown=node:node /migrate ./migrate
 
+# The AWS Lambda Web Adapter (the hosting record's D-2 / D-3: one image runs on
+# every target). It is a Lambda EXTENSION: only the Lambda runtime starts
+# anything under /opt/extensions, so on a Fly Machine or in `docker run` it is
+# an inert file and `node server.js` serves exactly as before. Under Lambda it
+# proxies each invocation to the same server on the manifest's port, once the
+# manifest's health path answers.
+COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0 /lambda-adapter /opt/extensions/lambda-adapter
+ENV AWS_LWA_PORT=3000 \
+    AWS_LWA_READINESS_CHECK_PATH=/api/health \
+    AWS_LWA_INVOKE_MODE=response_stream
+
 USER node
 EXPOSE 3000
 CMD ["node", "server.js"]

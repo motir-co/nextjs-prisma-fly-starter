@@ -199,7 +199,8 @@ public/       Static assets.
 .github/
   workflows/  CI definitions: `ci.yml` (lint, typecheck, unit, build, e2e),
               `acceptance-tests.yml` (paths-filtered story-acceptance lane),
-              and the preview-database cleanup.
+              `preview-image.yml` (the preview image push, inert unless
+              Motir enables it) and the preview-database cleanup.
 ```
 
 ## CI
@@ -208,6 +209,8 @@ Runs on every PR and push to `main` via [`.github/workflows/ci.yml`](.github/wor
 Jobs:
 
 - **Lint** — `pnpm lint` + `pnpm format:check` (parallel)
+- **actionlint** — lints every workflow file under `.github/workflows/`
+  (parallel)
 - **TypeScript** — `pnpm prisma generate` then `pnpm typecheck` (parallel)
 - **Unit tests** — `pnpm test` (Vitest) against a Postgres 16 service
   container (parallel). The suites in `tests/*.test.ts` are integration
@@ -293,6 +296,30 @@ repo has no self-hosted runners, and a hardcoded `runs-on: [self-hosted, …]`
 would leave every job queued until GitHub drops it. If you own this repo and
 are not using Motir's fleet, you do not need to do anything — just leave
 `MOTIR_RUNNER` unset.
+
+### Previews on Motir — `preview-image.yml`
+
+[`.github/workflows/preview-image.yml`](.github/workflows/preview-image.yml)
+builds this repository's image on every pull request (opened, pushed to,
+reopened) and pushes it to the repository's **Fly preview image repository**,
+tagged with the pull request's full head commit SHA. That is all it does:
+Motir starts the preview from that image and serves it at
+`pr-<n>--<repo>.preview.motir.site` to the project's members. The workflow
+never deploys, and its one credential can push to the preview repository and
+nowhere else — never to production.
+
+**It is inert unless Motir switches previews on.** Its only job runs when the
+org variable `MOTIR_HOSTING_BUILD` is `on` and the repository variable
+`MOTIR_HOSTING_TARGET` is `fly`, and only for pull requests from this
+repository (never a fork). Motir also writes `MOTIR_HOSTING_IMAGE_PREVIEW`
+(the push target) and the `MOTIR_FLY_PREVIEW_PUSH_TOKEN` secret. A repository
+generated from this template without them — including one handed over to its
+owner — shows the job as **skipped** on every pull request, and nothing else
+changes. To stop previews yourself, delete those variables or this file.
+
+`tests/preview-image-workflow.test.ts` pins the gate, the token reaching its
+step only through `env:`, and the push target, and the `actionlint` job in
+`ci.yml` lints every workflow file.
 
 ## Customizing for your project
 
