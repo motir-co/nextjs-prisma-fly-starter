@@ -1,0 +1,147 @@
+# Build this repository's image on every push to `main` and push it to its Fly
+# PRODUCTION image repository — only when Motir has switched production on.
+#
+# What this workflow is, and what it is not
+# -----------------------------------------
+# Motir's hosting decision (MOTIR-5769, §4 and §11) splits a production release
+# in two: the repository's own CI BUILDS AND PUSHES one `linux/amd64` image per
+# commit on `main`, and motir-core RELEASES it through its deploy port when it
+# hears this run complete. This file is the first half and nothing else: it
+# never deploys, migrates or starts a release, and the only credential it sees
+# can push to one image repository, `registry.fly.io/mh-<rid>` (an app-scoped
+# Fly deploy token minted by Motir's production enablement).
+#
+# INERT UNLESS MOTIR TURNS IT ON. The job runs only when both hold:
+#
+#   vars.MOTIR_HOSTING_BUILD  == 'on' — the org Actions variable Motir sets on
+#                                       its own GitHub organisation;
+#   vars.MOTIR_HOSTING_TARGET != ''   — the repository variable Motir writes
+#                                       LAST when it switches production on, so
+#                                       a half-finished enablement never runs.
+#
+# A repository generated from this template with neither set shows the job as
+# SKIPPED (grey), never red. The gate is a job-level `if:` on variables, not on
+# the secret: secrets cannot be read in an `if:`.
+#
+# Configuration Motir writes (names are MOTIR-5769 §11's, verbatim, exported by
+# motir-core's lib/hosting/productionEnablementNames.ts)
+# ------------------------------------------------------------------------------
+#   environment `production`              — deployment branch `main` only; the
+#       job binds to it because that is where its secret lives.
+#   secrets.MOTIR_FLY_PRODUCTION_PUSH_TOKEN — environment secret: the deploy
+#       token of `mh-<rid>`. It reaches the job ONLY through `env:` and is fed to
+#       `docker login --password-stdin`; it is never spliced into a `run:` line,
+#       so it never lands in a process list or a shell trace.
+#   vars.MOTIR_HOSTING_IMAGE_PRODUCTION   — repository variable: the production
+#       image repository, `registry.fly.io/mh-<rid>`. No preview name is ever
+#       referenced here.
+#   vars.MOTIR_RUNNER                     — optional; see the block above `jobs:`
+#       in ci.yml.
+#
+# The pushed tag
+# --------------
+#   <MOTIR_HOSTING_IMAGE_PRODUCTION>:<full 40-character commit SHA>
+#
+# One immutable tag per commit, so motir-core derives the artifact of an exact
+# commit from the completed run's head SHA. The job also reports the reference
+# and the pushed digest as outputs and in its summary.
+#
+# tests/production-image-workflow.test.ts parses this file and pins the
+# trigger, the gate, the token-through-env rule, the push target and the
+# standalone build, so none of them can be removed quietly.
+
+name: production-image
+
+on:
+  push:
+    branches: [main]
+
+# Two merges in a row both build: a production commit is never dropped, so the
+# later run waits instead of cancelling the earlier one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+# Least privilege: the checkout reads the repository, and nothing here writes to
+# GitHub. The push goes to Fly's registry with Fly's token, not GITHUB_TOKEN.
+permissions:
+  contents: read
+
+jobs:
+  push-production-image:
+    name: Build and push production image
+    if: vars.MOTIR_HOSTING_BUILD == 'on' && vars.MOTIR_HOSTING_TARGET != ''
+    runs-on: ${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}
+    environment: production
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    outputs:
+      image: ${{ steps.report.outputs.image }}
+      digest: ${{ steps.build.outputs.digest }}
+    env:
+      IMAGE_REPOSITORY: ${{ vars.MOTIR_HOSTING_IMAGE_PRODUCTION }}
+      FLY_API_TOKEN: ${{ secrets.MOTIR_FLY_PRODUCTION_PUSH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # Refuse, by name, a missing token or anything that is not a Fly
+      # PRODUCTION image repository, before any credential is used. A preview
+      # repository (`…-pv`) fails here.
+      - name: Check the push target
+        run: |
+          set -euo pipefail
+          if [ -z "${FLY_API_TOKEN:-}" ]; then
+            echo "::error::The production environment has no MOTIR_FLY_PRODUCTION_PUSH_TOKEN, but production is switched on for this repository."
+            exit 1
+          fi
+          if ! [[ "${IMAGE_REPOSITORY:-}" =~ ^registry\.fly\.io/[a-z0-9-]+$ ]] || [[ "${IMAGE_REPOSITORY}" == *-pv ]]; then
+            echo "::error::vars.MOTIR_HOSTING_IMAGE_PRODUCTION must be a Fly production image repository (registry.fly.io/<app>); got '${IMAGE_REPOSITORY:-}'."
+            exit 1
+          fi
+
+      - name: Log in to the Fly registry
+        run: docker login registry.fly.io --username x --password-stdin <<< "$FLY_API_TOKEN"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ vars.MOTIR_HOSTING_IMAGE_PRODUCTION }}:${{ github.sha }}
+          # A plain single-platform manifest: Fly Machines pull by platform, and
+          # the attestation index buildx adds by default carries an
+          # `unknown/unknown` entry that adds nothing a release runs.
+          provenance: false
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=production-image
+          cache-to: type=gha,mode=max,scope=production-image
+
+      - name: Report the pushed image
+        id: report
+        env:
+          IMAGE_REF: ${{ vars.MOTIR_HOSTING_IMAGE_PRODUCTION }}:${{ github.sha }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          echo "image=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
+          {
+            echo "Pushed \`${IMAGE_REF}\`"
+            echo ""
+            echo "Digest \`${IMAGE_DIGEST}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Self-hosted runners can outlive one job; never leave the push
+      # credential in ~/.docker/config.json behind it.
+      - name: Log out of the Fly registry
+        if: always()
+        run: docker logout registry.fly.io

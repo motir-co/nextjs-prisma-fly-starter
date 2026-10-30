@@ -421,6 +421,22 @@ siblings for small apps and for apps that need an AWS account of their own.
   (direct, for migrations), `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`,
   `EMAIL_PROVIDER`, and optionally `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`.
 
+### Production on Motir
+
+[`.github/workflows/production-image.yml`](.github/workflows/production-image.yml)
+builds this repository's `Dockerfile` on every push to `main` and pushes it to
+the repository's production Fly image repository as
+`<MOTIR_HOSTING_IMAGE_PRODUCTION>:<commit sha>`, reporting the reference and the
+digest in its run summary. It does not deploy: Motir starts the release when it
+hears the run complete.
+
+It is **inert unless Motir switches production on**. Motir writes the GitHub
+environment `production` (deployment branch `main` only) with its secret
+`MOTIR_FLY_PRODUCTION_PUSH_TOKEN`, then the repository variables
+`MOTIR_HOSTING_IMAGE_PRODUCTION` and `MOTIR_HOSTING_TARGET`; the job also needs
+the org variable `MOTIR_HOSTING_BUILD` = `on`. Without them, as in a clone
+outside Motir, the job shows as skipped, never red.
+
 ## License
 
 [MIT](LICENSE). Fork freely. The copyright notice in LICENSE applies only
