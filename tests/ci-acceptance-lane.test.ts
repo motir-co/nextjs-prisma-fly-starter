@@ -203,8 +203,14 @@ describe('the lane publishes on a green PR run, over OIDC only (MOTIR-7255)', ()
     expect(publishStep()).not.toMatch(/^\s*token:/m);
     const offenders = ciYaml()
       .filter(([f]) => f.startsWith('.github/workflows/'))
+      // A Motir HOSTING push token is not a Motir credential: it is a Fly deploy
+      // token scoped to the repository's own app, written into its `production`
+      // (or preview) environment by Motir's enablement, and the image workflows
+      // need it to push (MOTIR-10029). Every other `secrets.MOTIR*` still fails.
       .filter(([, text]) =>
-        /MOTIR_UPLOAD_TOKEN|MOTIR_PUBLISH_TOKEN|secrets\.MOTIR/.test(codeOf(text)),
+        /MOTIR_UPLOAD_TOKEN|MOTIR_PUBLISH_TOKEN|secrets\.MOTIR(?!_FLY_(?:PRODUCTION|PREVIEW)_PUSH_TOKEN\b)/.test(
+          codeOf(text),
+        ),
       )
       .map(([f]) => f);
     expect(offenders).toEqual([]);
