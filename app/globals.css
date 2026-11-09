@@ -17,6 +17,16 @@
  */
 @import '@motir/design-system/theme.css';
 
+/*
+ * Tailwind v4's automatic source detection skips `node_modules`, so a utility
+ * used only inside the package's compiled components (the `/tokens` specimen's
+ * `font-serif` headline, the `DatePicker`'s layout) is never generated unless
+ * the package's `dist` is named here. The build still succeeds and nothing
+ * errors; the components simply render unstyled. The path is relative to this
+ * file.
+ */
+@source '../node_modules/@motir/design-system/dist';
+
 body {
   background-color: var(--el-page-bg);
   color: var(--el-page-text);
