@@ -70,17 +70,21 @@ describe('app/globals.css imports the package token CSS (no vendored copy)', () 
   it('@sources the package dist so its components get their own utilities', () => {
     // Tailwind v4 never scans node_modules on its own: without this line a
     // class used only inside a package component (e.g. the /tokens heading's
-    // `font-serif`) is never generated, and the type axis silently does nothing.
+    // serif face class) is never generated, and the type axis silently does nothing.
     expect(css).toContain("@source '../node_modules/@motir/design-system/dist';");
     // The relative path must land on the package's compiled output, and that
     // output must be where the package's own class names live (the /tokens
-    // specimen heading's `font-serif` is the one the defect was seen on).
+    // specimen heading's serif face class is the one the defect was seen on).
+    // The needle is assembled at runtime: Tailwind scans this file too, and a
+    // literal class name here would generate that class with or without the
+    // @source line, hiding the defect this case pins.
+    const serifClass = ['font', 'serif'].join('-');
     const sourced = resolve(repoRoot, 'app', '../node_modules/@motir/design-system/dist');
     const compiled = readdirSync(sourced, { recursive: true, encoding: 'utf8' })
       .filter((f) => f.endsWith('.js'))
       .map((f) => readFileSync(resolve(sourced, f), 'utf8'));
     expect(compiled.length).toBeGreaterThan(0);
-    expect(compiled.some((js) => js.includes('font-serif'))).toBe(true);
+    expect(compiled.some((js) => js.includes(serifClass))).toBe(true);
   });
 
   it('drops the old hand-rolled raw-hex palette vars', () => {

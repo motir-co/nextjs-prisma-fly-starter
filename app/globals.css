@@ -20,10 +20,12 @@
 /*
  * Tailwind v4's automatic source detection skips `node_modules`, so a utility
  * used only inside the package's compiled components (the `/tokens` specimen's
- * `font-serif` headline, the `DatePicker`'s layout) is never generated unless
+ * serif headline, the `DatePicker`'s layout) is never generated unless
  * the package's `dist` is named here. The build still succeeds and nothing
  * errors; the components simply render unstyled. The path is relative to this
- * file.
+ * file. Name classes in words, not by their spelling, in comments here and
+ * anywhere else Tailwind scans: a spelled-out class name gets generated anyway
+ * and hides a missing @source.
  */
 @source '../node_modules/@motir/design-system/dist';
 
