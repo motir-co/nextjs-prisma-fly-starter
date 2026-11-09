@@ -102,13 +102,16 @@ scaffolded product looks designed out of the box.
 
 **Distribution: a versioned dependency on the public npm registry.** The design
 system lives in one place — the [`@motir/design-system`](https://www.npmjs.com/package/@motir/design-system)
-package (source: `motir-core/packages/design-system`) — and is consumed here as
-a normal caret-ranged dependency (`"@motir/design-system": "^0.1.0"`). It is
+package (source: `motir-core/packages/design-system`) — and is consumed here
+pinned to an **exact version** (`"@motir/design-system": "0.22.0"`). It is
 **GPL-3.0 and public**, so there is **no registry auth at install time** — a
 scaffold agent or a scaffolded product just `pnpm add @motir/design-system` like
-any public package. Updates arrive through normal `pnpm update` within the
-pinned major; the token contract (the `--el-*` names, the `data-*` attribute
-set, the theme-apply API) is the semver surface. This is the mechanism fixed by
+any public package. A release is adopted by moving that pin deliberately, not
+through `pnpm update`: a range on a `0.x` version admits patch releases only, so
+it could never reach a new minor, and `tests/design-system-version.test.ts`
+fails CI whenever the pin lags the registry's latest. The token contract (the
+`--el-*` names, the `data-*` attribute set, the theme-apply API) is the semver
+surface. This is the mechanism fixed by
 the keystone ADR (`motir-core/docs/decisions/design-system-package.md`);
 publishing to a private registry, a git dependency, and a vendored/synced copy
 were all considered and rejected there. **There is no hand-copied token CSS or

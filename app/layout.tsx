@@ -1,9 +1,13 @@
 import type { Metadata } from 'next';
 import {
+  Caveat,
+  Fira_Sans,
   Fraunces,
   IBM_Plex_Mono,
   Inter,
   JetBrains_Mono,
+  Nunito,
+  Roboto_Slab,
   Source_Serif_4,
   Space_Grotesk,
 } from 'next/font/google';
@@ -32,9 +36,15 @@ import './globals.css';
  * `var(--font-*-source)` reference unresolved and the whole UI silently falls
  * back to system faces.
  *
- * The base three (sans / serif / mono) dress the default `motir` type pairing;
- * the other three feed the non-default pairings (mono-technical / grotesk /
- * editorial) and only pay their download weight when that pairing is selected.
+ * Ten faces in all. The base three (Inter / Source Serif 4 / JetBrains Mono →
+ * sans / serif / mono) dress the default `motir` type pairing. The other seven
+ * feed the non-default pairings — IBM Plex Mono (mono-technical), Space Grotesk
+ * (grotesk), Fraunces (editorial), Caveat (marker), Nunito (rounded), Roboto
+ * Slab (slab) and Fira Sans (humanist) — and only pay their download weight
+ * when that pairing is selected. The last four also opt out of preloading
+ * (`preload: false`), so a first paint never fetches a face no one chose.
+ * `tests/design-system-wiring.test.ts` fails when the installed theme.css reads
+ * a `--font-*-source` this file does not load.
  */
 const inter = Inter({ subsets: ['latin'], variable: '--font-sans-source', display: 'swap' });
 const sourceSerif = Source_Serif_4({
@@ -62,6 +72,31 @@ const fraunces = Fraunces({
   subsets: ['latin'],
   variable: '--font-editorial-source',
   display: 'swap',
+});
+const caveat = Caveat({
+  subsets: ['latin'],
+  variable: '--font-marker-source',
+  display: 'swap',
+  preload: false,
+});
+const nunito = Nunito({
+  subsets: ['latin'],
+  variable: '--font-rounded-source',
+  display: 'swap',
+  preload: false,
+});
+const robotoSlab = Roboto_Slab({
+  subsets: ['latin'],
+  variable: '--font-slab-source',
+  display: 'swap',
+  preload: false,
+});
+const firaSans = Fira_Sans({
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700'],
+  variable: '--font-humanist-source',
+  display: 'swap',
+  preload: false,
 });
 
 export const metadata: Metadata = {
@@ -99,7 +134,7 @@ export default async function RootLayout({
     <html
       lang={locale}
       dir={localeDir[locale]}
-      className={`${inter.variable} ${sourceSerif.variable} ${jetbrainsMono.variable} ${ibmPlexMono.variable} ${spaceGrotesk.variable} ${fraunces.variable} h-full antialiased`}
+      className={`${inter.variable} ${sourceSerif.variable} ${jetbrainsMono.variable} ${ibmPlexMono.variable} ${spaceGrotesk.variable} ${fraunces.variable} ${caveat.variable} ${nunito.variable} ${robotoSlab.variable} ${firaSans.variable} h-full antialiased`}
       suppressHydrationWarning
       data-style={applied.styleId}
       data-palette={applied.paletteId}
