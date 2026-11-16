@@ -65,7 +65,7 @@ name: Preview image
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 # One build per pull request; a new push cancels the build of the commit it
 # replaced, whose image no preview would run anyway. The PR number is an
@@ -86,7 +86,8 @@ jobs:
     if: >-
       vars.MOTIR_HOSTING_BUILD == 'on' &&
       vars.MOTIR_HOSTING_TARGET == 'fly' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: ${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read
