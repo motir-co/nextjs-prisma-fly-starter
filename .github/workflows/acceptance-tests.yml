@@ -109,6 +109,10 @@ on:
   pull_request:
     paths:
       - 'tests/e2e/acceptance*.spec.ts'
+    # `ready_for_review` starts the run when a draft is marked ready: the jobs
+    # below skip while the pull request is a draft (saves CI minutes on work in
+    # progress), and without this type nothing would run at that moment.
+    types: [opened, synchronize, reopened, ready_for_review]
   # The DEFAULT-BRANCH BASELINE. Deliberately NOT `paths:`-filtered: while the
   # lane holds a spec, ANY merge could be the one that breaks it, and which
   # sources that spec reads is precisely what a filter cannot know. The
@@ -146,6 +150,7 @@ jobs:
   # for `push`, where no filter has spoken and no pull request is watching.
   membership:
     name: Does the lane hold a spec?
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     # Runner selection goes through the `MOTIR_RUNNER` Actions variable rather
     # than a hardcoded label — the same seam every job in ci.yml uses. An unset
     # variable is the empty string, which is falsy, so a repo with no self-hosted
