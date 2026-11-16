@@ -236,3 +236,324 @@ describe('the lane publishes on a green PR run, over OIDC only (MOTIR-7255)', ()
     expect(acceptance).toMatch(/if:\s*always\(\)/);
   });
 });
+
+// ── THE ACCEPTANCE FRAME (MOTIR-11471) ──────────────────────────────────────
+//
+// Every receipt records at ONE size. The clip has a fixed frame (`video.size`)
+// and Playwright SCALES whatever the page is into it, so a spec that resized its
+// page — `page.setViewportSize(…)`, a `test.use({ viewport })`, a context opened
+// at its own size — published a receipt shrunk into the frame, letterboxed, or
+// changing size halfway through. Motir's own lane had six such specs before this
+// guard; it holds the same two things here:
+//
+//   1. THE CONFIG records at the size its project's viewport is, spelled as ONE
+//      expression, resolving to 1920×1080, set AFTER the device spread (so the
+//      device's own viewport cannot win), with `deviceScaleFactor: 1`.
+//   2. NOTHING THE LANE RUNS resizes the page: every spec the config's own
+//      `testMatch` selects, and every local module under `tests/e2e` those specs
+//      reach through a relative import, is read for a `setViewportSize(` call, a
+//      `test.use({ … })` that sets `viewport` / `video` / `deviceScaleFactor` or
+//      spreads a `devices[…]` preset, and a `newContext(` / `newPage(` that does
+//      the same or names `recordVideo` — or whose options are not an object
+//      literal it can read, which fails rather than passes.
+//
+// A plain `browser.newContext()` is fine: Playwright gives it the project's
+// `use` options (so the frame) and never records it — only the `page` /
+// `context` fixture records. A responsive check belongs in a main-lane spec.
+
+const E2E_DIR = 'tests/e2e';
+const FRAME = { width: 1920, height: 1080 } as const;
+
+/** Comments blanked to spaces, every newline and string kept — so a line number
+ *  read from the result is the source's, and a `//` inside a string survives. */
+export function blankComments(source: string): string {
+  const out = source.split('');
+  let i = 0;
+  while (i < source.length) {
+    const c = source[i]!;
+    const next = source[i + 1];
+    if (c === '/' && next === '/') {
+      while (i < source.length && source[i] !== '\n') out[i++] = ' ';
+    } else if (c === '/' && next === '*') {
+      const end = source.indexOf('*/', i + 2);
+      const stop = end === -1 ? source.length : end + 2;
+      for (; i < stop; i++) if (out[i] !== '\n') out[i] = ' ';
+    } else if (c === "'" || c === '"' || c === '`') {
+      i += 1;
+      while (i < source.length && source[i] !== c) {
+        if (source[i] === '\\') i += 1;
+        else if (c !== '`' && source[i] === '\n') break;
+        i += 1;
+      }
+      i += 1;
+    } else i += 1;
+  }
+  return out.join('');
+}
+
+const squash = (text: string) => text.replace(/\s+/g, ' ').trim();
+const EXPRESSION = String.raw`([A-Za-z_$][\w$]*|\{[^{}]*\})`;
+
+function sizeOf(literal: string): { width: number; height: number } | null {
+  const width = /\bwidth\s*:\s*(\d+)/.exec(literal);
+  const height = /\bheight\s*:\s*(\d+)/.exec(literal);
+  return width && height ? { width: Number(width[1]), height: Number(height[1]) } : null;
+}
+
+export function frameDeclarationIn(configSource: string) {
+  const text = blankComments(configSource);
+  const video = new RegExp(String.raw`\bvideo\s*:\s*\{[^{}]*?\bsize\s*:\s*${EXPRESSION}`).exec(
+    text,
+  );
+  const videoSize = video?.[1] ? squash(video[1]) : null;
+  const viewports = [
+    ...text.matchAll(new RegExp(String.raw`\bviewport\s*:\s*${EXPRESSION}`, 'g')),
+  ].map((m) => squash(m[1]!));
+  let resolved: { width: number; height: number } | null = null;
+  if (videoSize?.startsWith('{')) resolved = sizeOf(videoSize);
+  else if (videoSize) {
+    const decl = new RegExp(String.raw`\bconst\s+${videoSize}\s*=\s*(\{[^{}]*\})`).exec(text);
+    resolved = decl?.[1] ? sizeOf(decl[1]) : null;
+  }
+  const spread = text.search(/\.\.\.\s*devices\s*\[/);
+  return {
+    videoSize,
+    viewports,
+    resolved,
+    viewportAfterDeviceSpread: spread >= 0 && text.search(/\bviewport\s*:/) > spread,
+    scaleFactorOne: /\bdeviceScaleFactor\s*:\s*1\b/.test(text),
+  };
+}
+
+/** The config's own `testMatch`, a RegExp literal or a string glob list. */
+export function laneMatcherIn(configSource: string): (relativePath: string) => boolean {
+  const text = blankComments(configSource);
+  const regex = /\btestMatch\s*:\s*\/((?:\\\/|[^/\n])+)\/([a-z]*)/.exec(text);
+  if (regex) {
+    const pattern = new RegExp(regex[1]!, regex[2]);
+    return (rel) => pattern.test(rel);
+  }
+  throw new Error('playwright.acceptance.config.ts: no RegExp `testMatch` this guard can read');
+}
+
+export interface FrameViolation {
+  file: string;
+  line: number;
+  what: string;
+}
+
+const CONTEXT_KEYS = ['viewport', 'recordVideo', 'deviceScaleFactor'];
+const USE_KEYS = ['viewport', 'video', 'deviceScaleFactor'];
+const lineAt = (text: string, index: number) => text.slice(0, index).split('\n').length;
+
+function objectAt(text: string, open: number): string | null {
+  let depth = 0;
+  for (let i = open; i < text.length; i += 1) {
+    if (text[i] === '{') depth += 1;
+    else if (text[i] === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(open, i + 1);
+    }
+  }
+  return null;
+}
+
+function framingKeysIn(literal: string, keys: readonly string[]): string[] {
+  const found = keys.filter((key) =>
+    new RegExp(String.raw`(?:^|[{,\s])${key}\s*(?::|,|\})`).test(literal),
+  );
+  if (/\.\.\.\s*devices\s*\[/.test(literal)) found.push('...devices[…]');
+  return found;
+}
+
+export function frameViolationsIn(file: string, source: string): FrameViolation[] {
+  const text = blankComments(source);
+  const out: FrameViolation[] = [];
+  for (const m of text.matchAll(/\bsetViewportSize\s*\(/g)) {
+    out.push({
+      file,
+      line: lineAt(text, m.index),
+      what: 'calls setViewportSize — the clip is scaled into the frame from that moment on',
+    });
+  }
+  for (const m of text.matchAll(/(?:(\b[\w$]+)\s*\.\s*)?\b(newContext|newPage|use)\s*\(/g)) {
+    const receiver = m[1] ?? '';
+    const call = m[2]!;
+    if (call === 'use' && receiver !== 'test') continue;
+    if (call !== 'use' && /request/i.test(receiver)) continue; // an APIRequestContext
+    const argStart = m.index + m[0].length;
+    const lead = /^\s*/.exec(text.slice(argStart))![0].length;
+    const next = text[argStart + lead];
+    const line = lineAt(text, m.index);
+    const label = receiver ? `${receiver}.${call}` : call;
+    if (next === ')') continue;
+    if (next !== '{') {
+      out.push({
+        file,
+        line,
+        what: `${label}(…) takes options this guard cannot read — pass an object literal`,
+      });
+      continue;
+    }
+    const literal = objectAt(text, argStart + lead);
+    const keys =
+      literal === null
+        ? ['(unclosed)']
+        : framingKeysIn(literal, call === 'use' ? USE_KEYS : CONTEXT_KEYS);
+    if (keys.length > 0) {
+      out.push({ file, line, what: `${label}({ ${keys.join(', ')} }) sets its own frame` });
+    }
+  }
+  return out;
+}
+
+function e2eFiles(): string[] {
+  const out: string[] = [];
+  const walk = (rel: string): void => {
+    for (const entry of fs.readdirSync(path.join(process.cwd(), rel))) {
+      const child = path.posix.join(rel, entry);
+      if (fs.statSync(path.join(process.cwd(), child)).isDirectory()) walk(child);
+      else if (child.endsWith('.ts')) out.push(child);
+    }
+  };
+  walk(E2E_DIR);
+  return out;
+}
+
+/** The lane's specs, plus every module under `tests/e2e` they reach by a relative import. */
+export function laneModules(
+  files: readonly string[],
+  read: (file: string) => string,
+  inLane: (relativePath: string) => boolean,
+): { specs: string[]; reached: string[] } {
+  const known = new Set(files);
+  const specs = files.filter((f) => inLane(f.slice(E2E_DIR.length + 1)));
+  const reached = new Set<string>(specs);
+  const queue = [...specs];
+  while (queue.length > 0) {
+    const file = queue.shift()!;
+    const text = blankComments(read(file));
+    for (const m of text.matchAll(/\b(?:from|import)\s*\(?\s*['"](\.[^'"]+)['"]/g)) {
+      const base = path.posix.normalize(path.posix.join(path.posix.dirname(file), m[1]!));
+      const target = [base, `${base}.ts`, `${base}/index.ts`].find((c) => known.has(c));
+      if (target && !reached.has(target)) {
+        reached.add(target);
+        queue.push(target);
+      }
+    }
+  }
+  return { specs, reached: [...reached].sort() };
+}
+
+const describeViolation = (v: FrameViolation) => `${v.file}:${v.line} — ${v.what}`;
+
+describe('the acceptance lane records at ONE fixed frame (MOTIR-11471)', () => {
+  const configSource = fs.readFileSync(ACCEPTANCE_CONFIG, 'utf8');
+  const frame = frameDeclarationIn(configSource);
+  const read = (file: string) => fs.readFileSync(path.join(process.cwd(), file), 'utf8');
+
+  it('the config records at exactly its viewport, spelled once, at 1920×1080', () => {
+    expect(frame.videoSize, 'video.size is set').not.toBeNull();
+    expect(frame.viewports.length, 'the project sets a viewport').toBeGreaterThan(0);
+    for (const viewport of frame.viewports) {
+      expect(viewport, 'every viewport is the expression video.size is').toBe(frame.videoSize);
+    }
+    expect(frame.resolved, `${frame.videoSize} resolves to the frame`).toEqual(FRAME);
+  });
+
+  it('the viewport wins over the device preset, at one CSS pixel per video pixel', () => {
+    expect(frame.viewportAfterDeviceSpread).toBe(true);
+    expect(frame.scaleFactorOne).toBe(true);
+  });
+
+  it('nothing the lane runs resizes the page or opens its own frame', () => {
+    const { reached } = laneModules(e2eFiles(), read, laneMatcherIn(configSource));
+    expect(
+      reached.flatMap((f) => frameViolationsIn(f, read(f))).map(describeViolation),
+      'An acceptance receipt records at the lane’s one fixed frame (1920×1080) from the first ' +
+        'frame to the last. Remove the resize; a responsive check belongs in a main-lane spec.',
+    ).toEqual([]);
+  });
+});
+
+describe('the frame guard fires on every framing shape — demonstrated, not assumed', () => {
+  const at = (source: string) => frameViolationsIn('tests/e2e/acceptance-x.spec.ts', source);
+
+  it('RED: setViewportSize, with the line it is on', () => {
+    const v = at(
+      ['test("x", async ({ page }) => {', '  await page.setViewportSize(WIDE);', '});'].join('\n'),
+    );
+    expect(v).toHaveLength(1);
+    expect(describeViolation(v[0]!)).toMatch(/^tests\/e2e\/acceptance-x\.spec\.ts:2 — /);
+  });
+
+  it('RED: a context or page at its own size, a second recorder, a preset, unreadable options', () => {
+    expect(at('await browser.newContext({ viewport: { width: 390, height: 844 } });')).toHaveLength(
+      1,
+    );
+    expect(at('const viewport = WIDE; await browser.newContext({ viewport });')).toHaveLength(1);
+    expect(at("await browser.newContext({ recordVideo: { dir: 'out' } });")).toHaveLength(1);
+    expect(at("await browser.newPage({ ...devices['iPhone 13'] });")).toHaveLength(1);
+    expect(at('await browser.newContext(options);')[0]?.what).toMatch(/cannot read/);
+  });
+
+  it('RED: a test.use that sets the viewport, the video or a preset', () => {
+    expect(at('test.use({ viewport: { width: 390, height: 844 } });')).toHaveLength(1);
+    expect(at("test.use({ video: 'off' });")).toHaveLength(1);
+    expect(at("test.use({ ...devices['Pixel 7'] });")).toHaveLength(1);
+  });
+
+  it('GREEN: the lane’s own frame, options that frame nothing, API contexts and prose', () => {
+    expect(at('await browser.newContext();')).toEqual([]);
+    expect(at('const tab = await context.newPage();')).toEqual([]);
+    expect(at("await browser.newContext({ locale: 'zh', baseURL });")).toEqual([]);
+    expect(at("test.use({ permissions: ['clipboard-read'] });")).toEqual([]);
+    expect(at('await browser.newContext({ viewportLabel: 1 });')).toEqual([]);
+    expect(at('const api = await request.newContext(opts);')).toEqual([]);
+    expect(at('// never call page.setViewportSize() in this lane')).toEqual([]);
+    expect(at("const url = 'https://example.test/x'; // page.setViewportSize()")).toEqual([]);
+  });
+
+  it('the config arm: one expression, resolved, after the spread, scale 1', () => {
+    const good = [
+      'const FRAME = { width: 1920, height: 1080 } as const;',
+      "export default defineConfig({ use: { video: { mode: 'on', size: FRAME } },",
+      "  projects: [{ name: 'c', use: { ...devices['Desktop Chrome'], viewport: FRAME, deviceScaleFactor: 1 } }] });",
+    ].join('\n');
+    expect(frameDeclarationIn(good)).toEqual({
+      videoSize: 'FRAME',
+      viewports: ['FRAME'],
+      resolved: FRAME,
+      viewportAfterDeviceSpread: true,
+      scaleFactorOne: true,
+    });
+    const before = [
+      "export default defineConfig({ use: { video: { mode: 'on', size: { width: 1280, height: 720 } } },",
+      "  projects: [{ name: 'c', use: { ...devices['Desktop Chrome'] } }] });",
+    ].join('\n');
+    const read = frameDeclarationIn(before);
+    expect(read.viewports).toEqual([]);
+    expect(read.resolved).toEqual({ width: 1280, height: 720 });
+    expect(read.viewportAfterDeviceSpread).toBe(false);
+    const twice = good.replace('viewport: FRAME', 'viewport: { width: 1920, height: 1080 }');
+    expect(frameDeclarationIn(twice).viewports).toEqual(['{ width: 1920, height: 1080 }']);
+  });
+
+  it('the walk follows relative imports, and the config’s RegExp decides the specs', () => {
+    const inLane = laneMatcherIn('export default { testMatch: /acceptance.*\\.spec\\.ts/ };');
+    const tree: Record<string, string> = {
+      'tests/e2e/acceptance-a.spec.ts': "import { seed } from './_helpers/seed';",
+      'tests/e2e/_helpers/seed.ts': "import { deep } from './deep';\nimport x from '@/lib/x';",
+      'tests/e2e/_helpers/deep.ts': 'export const deep = 1;',
+      'tests/e2e/widget.spec.ts': "import { unused } from './_helpers/unused';",
+      'tests/e2e/_helpers/unused.ts': 'export const unused = 1;',
+    };
+    const result = laneModules(Object.keys(tree), (f) => tree[f]!, inLane);
+    expect(result.specs).toEqual(['tests/e2e/acceptance-a.spec.ts']);
+    expect(result.reached).toEqual([
+      'tests/e2e/_helpers/deep.ts',
+      'tests/e2e/_helpers/seed.ts',
+      'tests/e2e/acceptance-a.spec.ts',
+    ]);
+  });
+});

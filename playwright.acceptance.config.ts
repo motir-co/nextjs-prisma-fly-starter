@@ -34,6 +34,15 @@ const USING_CUSTOM_ORIGIN = Boolean(process.env['E2E_BASE_URL']) || Boolean(proc
 const BASE_URL = process.env['E2E_BASE_URL'] ?? `http://localhost:${process.env['PORT'] ?? '3200'}`;
 const PORT = new URL(BASE_URL).port || '3200';
 
+// THE ACCEPTANCE FRAME — every receipt is recorded at ONE size, and the page is
+// that size from the first frame to the last. It is both the viewport and the
+// video size below, so a clip is never a scaled copy of a differently-sized page
+// (Motir records every acceptance video at 1920×1080, MOTIR-11471). A spec never
+// resizes it — no `page.setViewportSize`, no `test.use({ viewport })`, no
+// `newContext({ viewport })` — and a responsive check belongs in a main-lane
+// spec. `tests/ci-acceptance-lane.test.ts` holds all of that.
+const ACCEPTANCE_FRAME = { width: 1920, height: 1080 } as const;
+
 export default defineConfig({
   testDir: 'tests/e2e',
   // Only the acceptance specs. Everything else is the main lane's.
@@ -57,12 +66,22 @@ export default defineConfig({
   outputDir: 'out/playwright-output-acceptance',
   use: {
     baseURL: BASE_URL,
-    // The whole point of the lane: record every run, pass or fail.
-    video: { mode: 'on', size: { width: 1280, height: 720 } },
+    // The whole point of the lane: record every run, pass or fail — at the
+    // lane's one fixed frame, so the clip is exactly the viewport.
+    video: { mode: 'on', size: ACCEPTANCE_FRAME },
     trace: 'on',
     screenshot: 'only-on-failure',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  // The frame is set AFTER the device spread, so the device's own 1280×720
+  // viewport cannot win, and `deviceScaleFactor: 1` keeps one CSS pixel one
+  // video pixel. A context a spec opens itself (`browser.newContext()`) inherits
+  // both and is never recorded: only the `page` / `context` fixture records.
+  projects: [
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'], viewport: ACCEPTANCE_FRAME, deviceScaleFactor: 1 },
+    },
+  ],
   webServer: {
     command: `pnpm dev --port ${PORT}`,
     url: BASE_URL,
