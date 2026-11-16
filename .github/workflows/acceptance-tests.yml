@@ -107,12 +107,12 @@ name: Acceptance tests
 # author who caused it rather than by the next passer-by.
 on:
   pull_request:
+    paths:
+      - 'tests/e2e/acceptance*.spec.ts'
     # `ready_for_review` starts the run when a draft is marked ready: the jobs
     # below skip while the pull request is a draft (saves CI minutes on work in
     # progress), and without this type nothing would run at that moment.
     types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - 'tests/e2e/acceptance*.spec.ts'
   # The DEFAULT-BRANCH BASELINE. Deliberately NOT `paths:`-filtered: while the
   # lane holds a spec, ANY merge could be the one that breaks it, and which
   # sources that spec reads is precisely what a filter cannot know. The

@@ -87,7 +87,7 @@ jobs:
       vars.MOTIR_HOSTING_BUILD == 'on' &&
       vars.MOTIR_HOSTING_TARGET == 'fly' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+      github.event.pull_request.draft == false
     runs-on: ${{ vars.MOTIR_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: read

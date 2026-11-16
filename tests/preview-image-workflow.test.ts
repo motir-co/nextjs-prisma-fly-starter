@@ -215,9 +215,14 @@ describe('the workflow is scoped to one pull request, with least privilege', () 
   const wf = loadWorkflow();
   const job = onlyJob(wf);
 
-  it('runs on pull_request opened, synchronize and reopened only', () => {
+  it('runs on pull_request opened, synchronize, reopened and ready_for_review only', () => {
     expect(Object.keys(wf.on)).toEqual(['pull_request']);
-    expect(wf.on['pull_request']?.types).toEqual(['opened', 'synchronize', 'reopened']);
+    expect(wf.on['pull_request']?.types).toEqual([
+      'opened',
+      'synchronize',
+      'reopened',
+      'ready_for_review',
+    ]);
   });
 
   it('cancels the previous build of the same pull request', () => {
@@ -250,7 +255,7 @@ describe('the job is gated on Motir switching previews on', () => {
       .filter(Boolean);
   }
 
-  it('carries an if: that ANDs exactly the three conditions', () => {
+  it('carries an if: that ANDs exactly the four conditions', () => {
     expect(job.if, 'preview-image.yml lost its job-level if:').toEqual(expect.any(String));
     expect(job.if).not.toMatch(/\|\||!\s*\(/);
     expect(clauses(job.if).sort()).toEqual(
@@ -258,6 +263,8 @@ describe('the job is gated on Motir switching previews on', () => {
         "vars.MOTIR_HOSTING_BUILD == 'on'",
         "vars.MOTIR_HOSTING_TARGET == 'fly'",
         'github.event.pull_request.head.repo.full_name == github.repository',
+        // A draft builds no preview; marking it ready does.
+        'github.event.pull_request.draft == false',
       ].sort(),
     );
   });
