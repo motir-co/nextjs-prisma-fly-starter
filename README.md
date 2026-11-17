@@ -146,6 +146,16 @@ there in the first commit, with a `DESIGN.md` naming them. To change the look,
 set other registered ids in that file; an unknown id falls back to that axis's
 default.
 
+**Backgrounds.** The same file names a background per page area —
+`backgrounds: { landing, login, hero }` — which ship as the Wave. The landing
+page draws `landing` behind the page and `hero` behind its hero section
+(gathered around the card), and the sign-in frame (`app/(auth)/layout.tsx`)
+draws `login` around the auth card, each through
+[`components/ProjectBackground.tsx`](components/ProjectBackground.tsx). An id is
+any background in the package's `BACKGROUND_REGISTRY`, or `none` to draw
+nothing; a missing key or an unknown id falls back to the style's default
+background.
+
 > **`nextjs-prisma-vercel-starter-with-design`** was an earlier, partial
 > hand-copied port of the design system. It is **superseded** by this
 > package-based wiring (per the ADR) and should be archived — this repo is the

@@ -1,5 +1,10 @@
 {
   "styleId": "warm-editorial",
   "paletteId": "motir",
-  "typeId": "motir"
+  "typeId": "motir",
+  "backgrounds": {
+    "landing": "wave",
+    "login": "wave",
+    "hero": "wave"
+  }
 }
