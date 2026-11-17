@@ -4,7 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  BACKGROUND_AREAS,
   buildThemeInitScript,
+  defaultBackgroundForStyle,
   DEFAULT_PALETTE_ID,
   DEFAULT_STYLE_ID,
   DEFAULT_TYPE_ID,
@@ -130,15 +132,21 @@ describe('app/layout.tsx applies the project design + FOUC seam', () => {
 describe('motir.design.json is the project design, and ships as the defaults', () => {
   const design = JSON.parse(read('motir.design.json')) as Record<string, unknown>;
 
-  it('carries exactly the three axis ids', () => {
-    expect(Object.keys(design).sort()).toEqual(['paletteId', 'styleId', 'typeId']);
+  it('carries exactly the three axis ids and the per-area backgrounds', () => {
+    expect(Object.keys(design).sort()).toEqual(['backgrounds', 'paletteId', 'styleId', 'typeId']);
+    // The areas are the package's own (MOTIR-11600), the set provisioning writes.
+    expect(Object.keys(design['backgrounds'] as object).sort()).toEqual(
+      [...BACKGROUND_AREAS].sort(),
+    );
   });
 
   it('ships the registry defaults, every one a registered id', () => {
+    const background = defaultBackgroundForStyle(DEFAULT_STYLE_ID);
     expect(design).toEqual({
       styleId: DEFAULT_STYLE_ID,
       paletteId: DEFAULT_PALETTE_ID,
       typeId: STYLE_DEFAULT_TYPE[DEFAULT_STYLE_ID] ?? DEFAULT_TYPE_ID,
+      backgrounds: { landing: background, login: background, hero: background },
     });
     expect(isStyleId(design['styleId'])).toBe(true);
     expect(isPaletteId(design['paletteId'])).toBe(true);
